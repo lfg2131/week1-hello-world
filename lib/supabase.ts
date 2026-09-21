@@ -1,14 +1,13 @@
 import { createClient } from "@supabase/supabase-js";
+import { getSupabaseEnv } from "./supabase/env";
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
+const { url, key } = getSupabaseEnv();
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error("Missing Supabase environment variables");
-}
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+// Keep the public Assignment 2 query anonymous, even when a visitor signs in.
+export const supabase = createClient(url, key, {
   auth: {
     persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false,
   },
 });

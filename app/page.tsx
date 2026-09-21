@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,11 @@ export default async function Home() {
   return (
     <main className="min-h-screen bg-zinc-950 px-6 py-16 text-white">
       <div className="mx-auto max-w-3xl">
+        <nav className="mb-8 flex flex-wrap gap-5 text-sm text-zinc-300" aria-label="Page navigation">
+          <span>Assignment 2 · Public</span>
+          <Link className="underline underline-offset-4" href="/login">Sign in</Link>
+          <Link className="underline underline-offset-4" href="/protected" prefetch={false}>Protected page</Link>
+        </nav>
         <h1 className="mb-2 text-4xl font-bold">Games from Supabase</h1>
 
         <p className="mb-8 text-zinc-400">
