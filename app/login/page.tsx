@@ -1,19 +1,23 @@
-import Link from "next/link";
+import { redirect } from "next/navigation";
 import GoogleSignIn from "./google-sign-in";
+import { createClient } from "@/lib/supabase/server";
+import { isProfileComplete } from "@/lib/profile";
+import { AccountShell, ProfileUnavailable } from "@/app/components/account-shell";
 
-export default function LoginPage() {
-  return (
-    <main className="min-h-screen bg-zinc-950 px-6 py-16 text-white">
-      <div className="mx-auto max-w-xl space-y-6 rounded-xl border border-zinc-800 bg-zinc-900 p-8">
-        <p className="text-sm text-zinc-400">Provisional Week 3 · /login</p>
-        <h1 className="text-3xl font-bold">Sign in with Google</h1>
-        <p className="text-zinc-300">Sign in to view the protected page. The Assignment 2 games page is public.</p>
-        <GoogleSignIn />
-        <nav className="flex flex-wrap gap-5 text-sm" aria-label="Page navigation">
-          <Link className="underline underline-offset-4" href="/">Public games</Link>
-          <Link className="underline underline-offset-4" href="/protected" prefetch={false}>Protected page</Link>
-        </nav>
-      </div>
-    </main>
-  );
+export default async function LoginPage() {
+  const supabase = await createClient();
+  const { data, error } = await supabase.auth.getClaims();
+  if (!error && data?.claims?.sub) {
+    const { data: profile, error: profileError } = await supabase.from("profiles")
+      .select("first_name,last_name").eq("id", data.claims.sub).single();
+    if (profileError || !profile) return <ProfileUnavailable />;
+    redirect(isProfileComplete(profile) ? "/protected" : "/profile/complete");
+  }
+  return <AccountShell signedIn={false} tone="auth">
+    <p className="status-auth">Week 3 · Your account</p>
+    <h1 className="text-3xl font-bold text-indigo-100">Sign in with Google</h1>
+    <p className="text-zinc-300">A few great games. A space of your own. Sign in to visit the protected page and personalize your profile.</p>
+    <GoogleSignIn />
+    <p className="text-sm text-zinc-400">The Public Games page is always available without an account.</p>
+  </AccountShell>;
 }

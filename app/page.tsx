@@ -1,5 +1,6 @@
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
+import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
@@ -20,25 +21,29 @@ export default async function Home() {
     throw new Error(`Failed to load games: ${error.message}`);
   }
 
+  const auth = await createClient();
+  const { data: identity } = await auth.auth.getClaims();
+  const signedIn = Boolean(identity?.claims?.sub);
+
   const games = (data ?? []) as Game[];
 
   return (
-    <main className="min-h-screen bg-zinc-950 px-6 py-16 text-white">
+    <main className="account-background min-h-screen px-6 py-16 text-white">
       <div className="mx-auto max-w-3xl">
-        <nav className="mb-8 flex flex-wrap gap-5 text-sm text-zinc-300" aria-label="Page navigation">
-          <span>Assignment 2 · Public</span>
-          <Link className="underline underline-offset-4" href="/login">Sign in</Link>
-          <Link className="underline underline-offset-4" href="/protected" prefetch={false}>Protected page</Link>
+        <nav className="mb-8 flex flex-wrap gap-2 text-sm text-slate-300" aria-label="Page navigation">
+          <Link className="nav-link bg-indigo-500/20 text-indigo-200" href="/" aria-current="page">Public Games</Link>
+          <Link className="nav-link" href={signedIn ? "/profile" : "/login"} prefetch={false}>{signedIn ? "Profile" : "Sign In"}</Link>
+          <Link className="nav-link" href="/protected" prefetch={false}>Protected Page</Link>
         </nav>
-        <h1 className="mb-2 text-4xl font-bold">Games from Supabase</h1>
+        <h1 className="mb-2 text-4xl font-bold text-indigo-100">Games from Supabase</h1>
 
         <p className="mb-8 text-zinc-400">
           This list is loaded from a Supabase database.
         </p>
 
-        <div className="overflow-hidden rounded-xl border border-zinc-800">
+        <div className="overflow-x-auto rounded-xl border border-indigo-400/30 shadow-xl shadow-indigo-950/30">
           <table className="w-full text-left">
-            <thead className="bg-zinc-900 text-zinc-300">
+            <thead className="bg-indigo-950/70 text-indigo-200">
               <tr>
                 <th className="px-5 py-4">Game</th>
                 <th className="px-5 py-4">Genre</th>
