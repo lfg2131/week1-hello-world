@@ -3,8 +3,9 @@
 Implementation branch: `week3-auth-final`, based on provisional commit
 `1233d03000b093e8bbe1a64d5e7ab2556550a81a`. Assignment 2 `main` remains at
 `2b8117ccd4b2e84a6247c0c1d71f25cc53f7afa0`. No merge, push, or deployment is
-included in this implementation. A push may trigger Vercel automatically, so
-wait until external OAuth configuration is ready.
+included in this implementation. Local Google OAuth and the full Week 3 flow
+have now been validated by the user. A push may trigger Vercel automatically;
+deployment remains a separate step and nothing has been pushed.
 
 ## Routes and authentication
 
@@ -56,16 +57,38 @@ Read-only Supabase MCP inspection on September 27, 2026 confirmed:
 - `on_auth_user_created` runs AFTER INSERT on `auth.users`, executing the existing
   `public.handle_new_user()`. It inserts a profile and intentionally does not
   populate the new name fields. First-time users therefore need onboarding.
-- RLS is enabled; existing authenticated own-row SELECT/UPDATE behavior remains.
+- RLS is enabled. Local E2E testing subsequently identified two required profile
+  access fixes, documented below; the initial inspection did not establish that
+  authenticated profile access worked end to end.
 - The existing `media` bucket is public, with authenticated own-folder storage
   policies. Its wider shared upload settings are unchanged; this UI applies the
   assignment's stricter 5 MB and JPEG/PNG/WebP limits.
 
-`supabase/migrations/20260927_week3_profiles_names.sql` documents only the
-already-applied, idempotent addition of nullable first/last names. It was **not
-executed** during implementation. Do not recreate profiles, its trigger/function,
-the bucket, policies, or unrelated Every Sport schema. No remote writes were
-needed. `week2_games` and its policy remain unchanged.
+`supabase/migrations/20260927_week3_profiles_names.sql` documents the already-applied,
+idempotent addition of nullable `first_name` and `last_name` to the existing table.
+That artifact is preserved unchanged. The table and auth.users trigger both
+predate Week 3 and were not recreated.
+
+After commit `60ac9b9c34a872bff7e977acb0d2128f47e9f5d6`, two additional fixes were
+applied remotely before the user successfully completed local E2E testing:
+
+1. `beta1_profiles_visibility` was adjusted to allow `(select auth.uid()) = id`
+   **or** `private.moderation_profile_visible_current(id)`. Users can always read
+   their own profile through this policy, while the existing moderation
+   visibility check is preserved for other profiles.
+2. `SELECT` and `UPDATE` on `public.profiles` were granted to `authenticated`.
+   These table privileges are required in addition to RLS policies; a policy
+   alone does not grant table access. Existing RLS still governs permitted rows.
+
+`supabase/migrations/20260928005217_week3_profile_access_fixes.sql` records those
+exact, already-applied statements. Repeating them against the existing table and
+named policy produces the same access configuration. The artifact alters only
+that policy's visibility expression and adds the two authenticated privileges;
+it does not drop/recreate policies, disable RLS, or modify unrelated policies.
+
+This documentation cleanup did **not** execute either SQL artifact or change the
+live database. Preserve the existing table, trigger/function, bucket, and
+unrelated Every Sport schema. `week2_games` and its policy remain unchanged.
 
 ## Profile and avatar updates
 
@@ -94,7 +117,11 @@ Old objects, including an upload followed by a failed profile save, are retained
 this app never deletes arbitrary existing photos. The bucket is public, so the
 UI explains that saved photos are publicly visible.
 
-## External setup (required before deployment)
+## External setup reference and remaining deployment steps
+
+The local Google/Supabase setup below is now working, as confirmed by the user's
+local E2E test. Keep these instructions as a reference; Vercel configuration and
+verification on the final deployment URL remain separate steps.
 
 ### Google Cloud / Google Auth Platform
 
@@ -201,9 +228,18 @@ absence of the old flow, secret patterns, and the additive-only SQL artifact.
 Smoke tests use the real public games query and unauthenticated routes. Tests
 create no accounts, upload no objects, and modify no remote database rows.
 Mocked unit tests validate application branches; they do not certify real OAuth
-cookies or remote authenticated RLS. Those require the manual flow below.
+cookies or remote authenticated RLS. The user has now confirmed the local manual
+flow below after the two already-applied access fixes.
 
 ## Manual E2E checklist
+
+**Local result (user-confirmed): passed.** Google OAuth works; logged-out
+`/protected` redirects correctly; first login creates/uses a profile;
+`/profile/complete` and profile editing work; avatar upload persists; and sign out
+works. These results followed the two remote profile access fixes documented
+above. This documentation-only cleanup does not repeat authenticated mutations.
+
+Retain the checklist below for verification on the eventual deployment URL.
 
 Use a fresh Incognito window and a Google account **new to this Supabase project**
 to exercise automatic profile creation. An existing account with complete names
@@ -230,9 +266,9 @@ correctly skips onboarding; do not delete shared users to simulate first login.
 - [ ] Test cookie refresh after token expiry and returning with an existing user.
 - [ ] Open the commit-specific URL in Incognito without Vercel authentication.
 
-Real Google login, trigger behavior for a newly created account, authenticated
-Storage writes, cookie refresh, and deployed sign-out remain manual until the
-external configuration and deployment are ready.
+The core local E2E flow is confirmed. Cookie refresh after token expiry and the
+full deployed flow, including deployed sign-out and public access without Vercel
+protection, still require separate verification before submission.
 
 ## References checked
 
