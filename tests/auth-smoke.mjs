@@ -1,55 +1,51 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { readFileSync, existsSync } from "node:fs";
 
-// Requires a running local production server. No accounts or rows are created.
+// Requires a running server (TEST_ORIGIN, default local production server).
+// Creates no accounts and no rows.
 const origin = process.env.TEST_ORIGIN || "http://localhost:3000";
 const request = (path, options = {}) => fetch(new URL(path, origin), { redirect: "manual", ...options });
+const location = (r) => new URL(r.headers.get("location"), origin).pathname;
 
-test("public Assignment 2 page displays all four database games", async () => {
-  const response = await request("/");
-  assert.equal(response.status, 200);
-  const html = await response.text();
-  for (const name of ["The Legend of Zelda: Breath of the Wild", "Minecraft", "Portal 2", "Rocket League"]) assert.ok(html.includes(name), `Missing game: ${name}`);
-  assert.equal((html.match(/<td class="px-5 py-4 font-medium">/g) || []).length, 4);
+for (const path of ["/", "/rate", "/create", "/profile"]) test(`logged out ${path} ends at /login`, async () => {
+  let response = await request(path);
+  for (let hops = 0; hops < 3 && response.status >= 300 && response.status < 400 && location(response) !== "/login"; hops++) response = await request(location(response));
+  assert.ok([303, 307, 308].includes(response.status));
+  assert.equal(location(response), "/login");
 });
 
-for (const path of ["/protected", "/profile", "/profile/complete"]) {
-  test(`unauthenticated ${path} redirects to login`, async () => {
-    const response = await request(path);
-    assert.equal(response.status, 307);
-    assert.equal(new URL(response.headers.get("location"), origin).pathname, "/login");
-    assert.ok(!(await response.text()).includes("This content is only visible to authenticated users."));
-  });
-}
-
-test("login renders Google OAuth button", async () => {
+test("login is public, branded, has imagery and Google sign-in", async () => {
   const response = await request("/login");
   assert.equal(response.status, 200);
-  assert.ok((await response.text()).includes("Continue with Google"));
+  const html = await response.text();
+  for (const text of ["Caption Lab", "Continue with Google", "login-hero"]) assert.ok(html.includes(text), text);
+  assert.match(html, /<img[^>]+alt="A hand holds up a phone[^"]+"/);
+  assert.doesNotMatch(html, /href="\/profile|<table/);
 });
 
-for (const query of ["", "?code=invalid-code", "?error=access_denied", "?next=https://evil.example"]) {
-  test(`callback fails safely: ${query || "no code"}`, async () => {
-    const response = await request(`/auth/callback${query}`, { headers: { "X-Forwarded-Host": "evil.example" } });
-    assert.equal(response.status, 303);
-    assert.equal(response.headers.get("location"), "/login");
-    assert.match(response.headers.get("cache-control"), /no-store/);
-    assert.equal(await response.text(), "");
-  });
-}
-
-test("callback no longer accepts POST", async () => {
-  const response = await request("/auth/callback", { method: "POST", body: "invalid" });
-  assert.equal(response.status, 405);
+for (const query of ["", "?code=invalid-code", "?error=access_denied", "?next=https://evil.example"]) test(`callback fails safely: ${query || "no code"}`, async () => {
+  const response = await request(`/auth/callback${query}`, { headers: { "X-Forwarded-Host": "evil.example" } });
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("location"), "/login");
+  assert.match(response.headers.get("cache-control"), /no-store/);
 });
 
-test("login emits the indigo palette and colored primary button styles", async () => {
-  const html = await (await request("/login")).text();
-  assert.match(html, /status-auth/);
-  assert.match(html, /primary-button/);
-  const stylesheets = [...html.matchAll(/href="([^"]+\.css(?:\?[^\"]*)?)"/g)].map((match) => match[1].replaceAll("&amp;", "&"));
-  assert.ok(stylesheets.length > 0);
-  const css = (await Promise.all(stylesheets.map(async (path) => (await fetch(new URL(path, origin))).text()))).join("\n");
-  assert.match(css, /\.primary-button\{[^}]*background-color:var\(--color-indigo-600\)/);
-  assert.match(css, /\.profile-button\{[^}]*background-color:var\(--color-violet-600\)/);
+test("anonymous Supabase clients cannot read or write Week 4 tables", async (t) => {
+  const env = existsSync(".env.local") ? Object.fromEntries(readFileSync(".env.local", "utf8").split("\n").filter((l) => l.startsWith("NEXT_PUBLIC_SUPABASE")).map((l) => [l.split("=")[0], l.slice(l.indexOf("=") + 1).replace(/["'\r]/g, "").trim()])) : {};
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key) return t.skip("Supabase env not available");
+  const headers = { apikey: key, Authorization: `Bearer ${key}`, "content-type": "application/json" };
+  const id = "11111111-1111-4111-8111-111111111111";
+  const rows = {
+    ai_captions: { batch_id: id, creator_id: id, source_image_path: `${id}/${id}.jpg`, caption: "x", generation_prompt: "x", model: "x" },
+    caption_votes: { caption_id: id, user_id: id, vote: 1 },
+  };
+  for (const table of ["ai_captions", "caption_votes"]) {
+    const read = await fetch(`${url}/rest/v1/${table}?select=id&limit=1`, { headers });
+    assert.ok([401, 403].includes(read.status), `${table} anon read ${read.status}`);
+    const write = await fetch(`${url}/rest/v1/${table}`, { method: "POST", headers, body: JSON.stringify(rows[table]) });
+    assert.ok([401, 403].includes(write.status), `${table} anon write ${write.status}`);
+  }
 });

@@ -1,57 +1,80 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 
 const read = (path) => readFileSync(path, "utf8");
-const files = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], { encoding: "utf8" }).split("\0").filter(Boolean);
+const files = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], { encoding: "utf8" }).split("\0").filter((p) => p && existsSync(p));
 const appFiles = files.filter((p) => /^(app|lib)\//.test(p) && /\.(tsx?|mjs)$/.test(p));
 const source = appFiles.map(read).join("\n");
+// SQL statements only (comments stripped), lowercased.
+const migrations = files.filter((p) => /^supabase\/migrations\/.*week4.*\.sql$/.test(p)).map(read).join("\n").replace(/--[^\n]*/g, "").toLowerCase();
 
-test("OAuth uses the exact callback without custom query parameters", () => {
-  const login = read("app/login/google-sign-in.tsx");
-  assert.match(login, /signInWithOAuth\(\{\s*provider: "google",\s*options: \{\s*redirectTo: `\$\{window.location.origin\}\/auth\/callback`,\s*\},\s*\}\)/);
+test("OAuth uses the exact callback and verified identity only", () => {
+  assert.match(read("app/login/google-sign-in.tsx"), /signInWithOAuth\(\{\s*provider: "google",\s*options: \{\s*redirectTo: `\$\{window.location.origin\}\/auth\/callback`,\s*\},\s*\}\)/);
   assert.equal((source.match(/redirectTo:/g) || []).length, 1);
-  assert.doesNotMatch(source, /signInWithIdToken|g_csrf_token|accounts\.google\.com\/gsi|NEXT_PUBLIC_GOOGLE_CLIENT_ID|getSession\(/);
+  assert.doesNotMatch(source, /getSession\(|signInWithIdToken|NEXT_PUBLIC_GOOGLE/);
+  assert.match(read("lib/auth.ts"), /getClaims\(\)/);
 });
 
 test("no privileged credentials in tracked or local environment files", () => {
   const envFiles = readdirSync(".").filter((p) => /^\.env/.test(p));
-  const candidates = [...new Set([...files, ...envFiles])].filter((p) => !p.startsWith("tests/") && !/\.(ico|png|jpg|woff2?)$/.test(p));
-  for (const path of candidates) {
+  for (const path of [...new Set([...files, ...envFiles])].filter((p) => !p.startsWith("tests/") && !/\.(ico|png|jpe?g|webp|woff2?)$/.test(p))) {
     const content = read(path);
-    // Print only the filename if a secret is found, never the matching value.
-    assert.ok(!/(?:GOOGLE_CLIENT_SECRET|NEXT_PUBLIC_GOOGLE_CLIENT_SECRET|SUPABASE_SERVICE_ROLE_KEY)\s*[=:]|GOCSPX-[\w-]+|sb_secret_[\w-]+|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/.test(content), `Forbidden credential in ${path}`);
+    // Report only the filename, never the matching value.
+    assert.ok(!/(?:GOOGLE_CLIENT_SECRET|SUPABASE_SERVICE_ROLE_KEY|NEXT_PUBLIC_GEMINI)\s*[=:]|GOCSPX-[\w-]+|sb_secret_[\w-]+|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/.test(content), `Forbidden credential in ${path}`);
+    if (path !== ".env.local") assert.doesNotMatch(content, /AIza[0-9A-Za-z_-]{30,}/, `Google API key in ${path}`);
     for (const token of content.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g) || []) {
       try { assert.notEqual(JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString()).role, "service_role", `Privileged JWT in ${path}`); }
       catch (error) { if (error.code === "ERR_ASSERTION") throw error; }
     }
   }
-  assert.ok(!files.includes(".env.local"));
+  assert.ok(!files.some((p) => p.startsWith(".env") && p !== ".env.example"));
 });
 
-test("SQL is additive only and does not weaken policies or store images", () => {
-  const sql = read("supabase/migrations/20260927_week3_profiles_names.sql").replace(/--[^\n]*/g, "").trim();
-  assert.equal(sql, "alter table public.profiles\n  add column if not exists first_name text,\n  add column if not exists last_name text;");
-  assert.doesNotMatch(source, /readAsDataURL|\.arrayBuffer\(|base64|\.from\("profiles"\)\.(insert|upsert)/);
+test("Gemini key is read only in server-side generation code", () => {
+  const users = appFiles.filter((p) => read(p).includes("GEMINI_API_KEY"));
+  assert.deepEqual(users, ["lib/captions/gemini.ts"]);
+  for (const path of appFiles.filter((p) => /^\s*["']use client["']/.test(read(p)))) {
+    assert.doesNotMatch(read(path), /captions\/gemini|captions\/prompt|process\.env\.GEMINI|service_role/, path);
+  }
 });
 
-test("upload is scoped to authenticated media folder and bytes never reach profile action", () => {
-  const form = read("app/profile/profile-form.tsx");
-  assert.match(form, /const userId = data.claims.sub/);
-  assert.ok(form.includes('`${userId}/profile/avatar-${crypto.randomUUID()}.${extension}`'));
-  assert.match(form, /storage.from\("media"\).upload\(path, photo/);
-  assert.match(form, /form.delete\("photo"\)/);
-  assert.match(read("app/profile/actions.ts"), /getPublicUrl\(avatarPath\)/);
+test("no raw HTML injection, no image bytes in Postgres, no client-chosen ids", () => {
+  assert.doesNotMatch(source, /dangerouslySetInnerHTML|innerHTML\s*=|readAsDataURL/);
+  assert.doesNotMatch(migrations, /bytea|base64/);
+  assert.doesNotMatch(read("app/(lab)/rate/actions.ts"), /\.(update|upsert|delete)\(/);
+  assert.doesNotMatch(read("app/(lab)/create/actions.ts"), /\.(update|upsert)\(/);
+  assert.match(read("app/(lab)/rate/actions.ts"), /user_id: userId/);
+  assert.match(read("app/(lab)/create/actions.ts"), /creator_id: userId/);
 });
 
-test("Week 3 has consistent semantic color accents and colored primary actions", () => {
-  const css = read("app/globals.css");
-  for (const color of ["indigo", "violet", "amber", "emerald", "red"]) assert.ok(css.includes(color));
-  assert.match(css, /\.primary-button\s*\{[^}]*bg-indigo-600/);
-  assert.match(css, /\.profile-button\s*\{[^}]*bg-violet-600/);
-  assert.match(read("app/login/page.tsx"), /tone="auth"/);
-  assert.match(read("app/profile/page.tsx"), /tone="profile"/);
-  assert.match(read("app/profile/complete/page.tsx"), /status-warning/);
-  assert.match(read("app/protected/page.tsx"), /status-success/);
+test("Week 4 migrations: RLS on, no anon grants, no client update/delete, private bucket", () => {
+  for (const table of ["ai_captions", "caption_votes"]) {
+    assert.ok(migrations.includes(`alter table public.${table} enable row level security`));
+    assert.ok(migrations.includes(`revoke all on table public.${table} from public, anon, authenticated`));
+  }
+  assert.doesNotMatch(migrations, /grant[^;]*to anon/);
+  assert.doesNotMatch(migrations, /grant (update|delete|all)/);
+  assert.doesNotMatch(migrations, /for (update|delete|all) to authenticated[\s\S]{0,40}on public\./);
+  assert.doesNotMatch(migrations, /drop table|truncate|disable row level security/);
+  assert.match(migrations, /creator_id = \(select auth\.uid\(\)\)/);
+  assert.match(migrations, /user_id = \(select auth\.uid\(\)\)/);
+  assert.match(migrations, /unique \(user_id, caption_id\)/);
+  assert.match(migrations, /check \(vote in \(-1, 1\)\)/);
+  assert.match(migrations, /'week4-media', 'week4-media', false, 5242880/);
+});
+
+test("Week 3 profile UX and the Week 2 table are gone from the product", () => {
+  assert.ok(!files.some((p) => /^app\/(profile|protected)\//.test(p)));
+  assert.doesNotMatch(source, /href="\/profile|isProfileComplete|ProfileUnavailable|from\("profiles"\)|week2_games|<table/);
+});
+
+test("UI renders images with alt text and Funny / Not funny text labels", () => {
+  const deck = read("app/(lab)/rate/rate-deck.tsx");
+  assert.match(deck, /<Image[\s\S]*?alt=\{card\.imageAlt\}/);
+  assert.match(deck, /Funny<\/button>|> Funny\s*<\/button>/);
+  assert.match(deck, /Not funny/);
+  assert.match(read("app/login/page.tsx"), /<Image[\s\S]*?alt="[^"]{20,}"/);
+  assert.match(read("app/(lab)/rate/page.tsx"), /Nothing left to rate/);
 });

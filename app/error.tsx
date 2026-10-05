@@ -4,13 +4,15 @@ import Link from "next/link";
 
 export default function ErrorPage({ reset }: { reset: () => void }) {
   return (
-    <main className="account-background flex min-h-screen items-center justify-center px-6 text-white">
-      <section className="max-w-lg space-y-5 rounded-2xl border border-red-400/30 bg-slate-900 p-8">
-        <p className="status-error">Something went wrong</p>
-        <h1 className="text-2xl font-bold">Please try again</h1>
-        <p className="text-slate-300">We couldn’t complete that request. Check your connection and retry. If this continues, contact the app owner.</p>
-        <button className="primary-button" onClick={reset}>Try again</button>
-        <Link href="/login" className="secondary-button ml-3 inline-block">Sign In</Link>
+    <main className="flex flex-1 items-center justify-center px-4 py-16">
+      <section className="card max-w-md space-y-5 p-8" aria-labelledby="error-title">
+        <p className="eyebrow text-red-200">Something broke</p>
+        <h1 id="error-title" className="text-2xl font-bold">That didn’t load</h1>
+        <p className="text-muted">Check your connection and try again. If it keeps happening, sign in again.</p>
+        <div className="flex flex-wrap gap-3">
+          <button className="btn-primary" onClick={reset}>Try again</button>
+          <Link href="/login" className="btn-quiet">Go to sign in</Link>
+        </div>
       </section>
     </main>
   );

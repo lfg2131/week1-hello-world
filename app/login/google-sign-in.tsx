@@ -20,16 +20,16 @@ export default function GoogleSignIn() {
       });
       if (error) throw error;
     } catch {
-      setError("Google sign-in could not start. Please try again or contact the app owner.");
+      setError("Google sign-in couldn’t start. Check your connection and try again.");
       setLoading(false);
     }
   }
 
-  return <div className="space-y-4">
-    <button type="button" className="primary-button w-full" disabled={loading} onClick={signIn}>
-      {loading ? "Connecting to Google…" : "Continue with Google"}
+  return <div className="space-y-3">
+    <button type="button" className="btn-primary w-full text-lg" disabled={loading} aria-busy={loading} onClick={signIn}>
+      {loading ? "Opening Google…" : "Continue with Google"}
     </button>
-    {error && <p role="alert" className="status-error">{error}</p>}
-    <noscript>Enable JavaScript to sign in with Google.</noscript>
+    {error && <p role="alert" className="alert-error">{error}</p>}
+    <noscript><p className="alert-error">Enable JavaScript to sign in with Google.</p></noscript>
   </div>;
 }
