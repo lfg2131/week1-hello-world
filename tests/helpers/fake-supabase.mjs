@@ -11,6 +11,8 @@ export function fakeSupabase({
   insertError = null,
   insertedRows = null,
   voteError = null,
+  rows = [],
+  selectError = null,
 } = {}) {
   const calls = [];
   const builder = (table) => {
@@ -29,7 +31,8 @@ export function fakeSupabase({
         return { data: { caption_id: insert[1].caption_id, vote: insert[1].vote }, error: null };
       }
       if (select?.[2]?.head) return { count: hourlyCount, error: countError };
-      return { data: [], error: null };
+      // Feed reads (Rate, Explore, recent drops) get `rows` exactly as the database would order them.
+      return selectError ? { data: null, error: selectError } : { data: rows, error: null };
     };
     const query = {
       select: record("select"), insert: record("insert"), eq: record("eq"), gte: record("gte"),
@@ -52,6 +55,10 @@ export function fakeSupabase({
         download: async (path) => { calls.push(["storage", "download", bucket, path]); return download; },
         remove: async (paths) => { calls.push(["storage", "remove", bucket, paths]); return { data: [], error: null }; },
         createSignedUrl: async (path, seconds) => { calls.push(["storage", "sign", bucket, path, seconds]); return { data: { signedUrl: `https://signed.example/${path}` }, error: null }; },
+        createSignedUrls: async (paths, seconds) => {
+          calls.push(["storage", "signMany", bucket, paths, seconds]);
+          return { data: paths.map((path) => ({ path, signedUrl: `https://signed.example/${path}`, error: null })), error: null };
+        },
       }),
     },
   };

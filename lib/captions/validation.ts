@@ -18,6 +18,15 @@ export type ImageExtension = (typeof IMAGE_TYPES)[ImageMimeType];
 export const TONES = ["clever", "dry", "chaotic"] as const;
 export type Tone = (typeof TONES)[number];
 
+/** Whose point of view the joke is written from. Mirrors ai_captions_perspective_valid. */
+export const PERSPECTIVES = ["student", "professor"] as const;
+export type Perspective = (typeof PERSPECTIVES)[number];
+export const DEFAULT_PERSPECTIVE: Perspective = "student";
+
+export function isPerspective(value: unknown): value is Perspective {
+  return typeof value === "string" && (PERSPECTIVES as readonly string[]).includes(value);
+}
+
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const UUID_RE = new RegExp(`^${UUID}$`);
 const IMAGE_PATH_RE = new RegExp(`^(${UUID})/${UUID}\\.(jpg|png|webp)$`);
@@ -70,18 +79,21 @@ export function extensionMimeType(path: string): ImageMimeType | null {
   return entry ? (entry[0] as ImageMimeType) : null;
 }
 
-export type GenerationOptions = { context: string | null; tone: Tone | null };
+export type GenerationOptions = { context: string | null; tone: Tone | null; perspective: Perspective };
 
-/** Normalize optional creator context and tone. Returns an error string when invalid. */
-export function parseGenerationOptions(context: unknown, tone: unknown): GenerationOptions | { error: string } {
+/** Normalize optional creator context, tone, and perspective. Returns an error string when invalid. */
+export function parseGenerationOptions(context: unknown, tone: unknown, perspective?: unknown): GenerationOptions | { error: string } {
   if (context !== null && context !== undefined && typeof context !== "string") return { error: "Context must be text." };
   if (tone !== null && tone !== undefined && tone !== "" && !(TONES as readonly unknown[]).includes(tone)) {
     return { error: "Pick Clever, Dry, Chaotic, or Surprise me." };
   }
+  // Missing means the default (Student); anything sent must be exactly "student" or "professor".
+  const voice = perspective ?? DEFAULT_PERSPECTIVE;
+  if (!isPerspective(voice)) return { error: "Pick Student or Professor." };
   // Strip control characters and collapse whitespace so the stored prompt is tidy.
   const cleaned = typeof context === "string" ? context.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim() : "";
   if (cleaned.length > MAX_CONTEXT_LENGTH) return { error: `Keep context under ${MAX_CONTEXT_LENGTH} characters.` };
-  return { context: cleaned || null, tone: tone ? (tone as Tone) : null };
+  return { context: cleaned || null, tone: tone ? (tone as Tone) : null, perspective: voice };
 }
 
 /** A vote is exactly +1 (Funny) or -1 (Not funny); everything else is rejected. */

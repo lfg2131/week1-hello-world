@@ -8,7 +8,9 @@ const files = execFileSync("git", ["ls-files", "--cached", "--others", "--exclud
 const appFiles = files.filter((p) => /^(app|lib)\//.test(p) && /\.(tsx?|mjs)$/.test(p));
 const source = appFiles.map(read).join("\n");
 // SQL statements only (comments stripped), lowercased.
-const migrations = files.filter((p) => /^supabase\/migrations\/.*week4.*\.sql$/.test(p)).map(read).join("\n").replace(/--[^\n]*/g, "").toLowerCase();
+const sql = (week) => files.filter((p) => new RegExp(`^supabase/migrations/.*${week}.*\\.sql$`).test(p)).map(read).join("\n").replace(/--[^\n]*/g, "").toLowerCase();
+const migrations = sql("week4");
+const week5 = sql("week5");
 
 test("OAuth uses the exact callback and verified identity only", () => {
   assert.match(read("app/login/google-sign-in.tsx"), /signInWithOAuth\(\{\s*provider: "google",\s*options: \{\s*redirectTo: `\$\{window.location.origin\}\/auth\/callback`,\s*\},\s*\}\)/);
@@ -63,6 +65,31 @@ test("Week 4 migrations: RLS on, no anon grants, no client update/delete, privat
   assert.match(migrations, /unique \(user_id, caption_id\)/);
   assert.match(migrations, /check \(vote in \(-1, 1\)\)/);
   assert.match(migrations, /'week4-media', 'week4-media', false, 5242880/);
+});
+
+test("Week 5 migration: allow-listed perspective, column-level INSERT only, RLS and policies untouched", () => {
+  assert.match(week5, /add column if not exists perspective text not null default 'student'/);
+  assert.match(week5, /add constraint ai_captions_perspective_valid\s+check \(perspective in \('student', 'professor'\)\)/);
+  assert.match(week5, /grant insert \(perspective\) on table public\.ai_captions to authenticated;/);
+  assert.equal((week5.match(/\bgrant\b/g) || []).length, 1);
+  assert.doesNotMatch(week5, /\banon\b|\bpublic\.caption_votes\b|storage\.|policy|row level security|revoke|drop table|drop column|truncate|delete from|update public/);
+});
+
+test("perspective is parsed on the server and saved from the parsed value, never raw input", () => {
+  const action = read("app/(lab)/create/actions.ts");
+  assert.match(action, /parseGenerationOptions\(context, tone, perspective\)/);
+  assert.match(action, /perspective: options\.perspective,/);
+  assert.match(read("app/(lab)/create/create-studio.tsx"), /createCaptions\(\{[^}]*\bperspective\b[^}]*\}\)/);
+  assert.match(read("lib/captions/prompt.ts"), /Perspective: \$\{PERSPECTIVE_GUIDANCE\[perspective\]\}/);
+});
+
+test("Explore is a signed-in page that never exposes vote data", () => {
+  const page = read("app/(lab)/explore/page.tsx");
+  assert.match(page, /await requireUser\(\)/);
+  assert.doesNotMatch(page, /caption_votes|"use client"|service_role/);
+  assert.match(page, /<Image[\s\S]*?alt=\{post\.imageAlt \|\| /);
+  assert.match(read("app/(lab)/lab-nav.tsx"), /"\/rate"[\s\S]*"\/explore"[\s\S]*"\/create"/);
+  assert.ok(!files.some((p) => /^app\/explore\//.test(p)), "Explore lives inside the protected (lab) layout");
 });
 
 test("Week 3 profile UX and the Week 2 table are gone from the product", () => {

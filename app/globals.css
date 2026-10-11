@@ -72,6 +72,9 @@ body {
   .alert-success {
     @apply rounded-2xl border border-lime-300/40 bg-lime-300/10 px-4 py-3 text-sm text-lime-100;
   }
+  .segment {
+    @apply flex min-h-16 w-full cursor-pointer flex-col items-center justify-center gap-0.5 rounded-xl px-3 py-2.5 text-center text-muted transition hover:bg-white/5 hover:text-foreground;
+  }
 }
 
 /* Visible, high-contrast focus for keyboard users on every control. */
@@ -87,6 +90,22 @@ body {
 }
 .tone-input:checked + .chip {
   @apply border-brand-soft bg-brand/20 text-white;
+}
+
+/* Perspective is a two-option segmented control built the same way. */
+.segment-input:focus-visible + .segment {
+  outline: 3px solid var(--funny);
+  outline-offset: 2px;
+}
+.segment-input:checked + .segment {
+  @apply bg-white text-zinc-950 shadow-sm;
+}
+.segment-input:checked + .segment .segment-hint {
+  @apply text-zinc-600;
+}
+.tone-input:disabled + .chip,
+.segment-input:disabled + .segment {
+  @apply cursor-not-allowed opacity-60;
 }
 
 .hero-scrim {

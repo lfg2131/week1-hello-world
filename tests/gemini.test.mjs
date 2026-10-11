@@ -8,7 +8,7 @@ const { buildCaptionPrompt } = loadModule("lib/captions/prompt.ts");
 
 import { ALT, CAPTIONS, geminiPayload } from "./helpers/fixtures.mjs";
 
-const prompt = buildCaptionPrompt({ context: "2am pizza", tone: "dry" }, { path: "u/x.jpg", mimeType: "image/jpeg", bytes: 3 });
+const prompt = buildCaptionPrompt({ context: "2am pizza", tone: "dry", perspective: "student" }, { path: "u/x.jpg", mimeType: "image/jpeg", bytes: 3 });
 const input = { prompt, image: new Uint8Array([0xff, 0xd8, 0xff]), mimeType: "image/jpeg" };
 const config = (fetchImpl, extra = {}) => ({ apiKey: "test-key-not-real", model: "gemini-3.8-flash", fetchImpl, retryDelayMs: 1, ...extra });
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -76,6 +76,16 @@ test("does not retry client errors and reports quota errors clearly", async () =
   await assert.rejects(gemini.generateCaptions(input, config(async () => { calls++; return json({}, 400); })), (e) => e.code === "http_400");
   assert.equal(calls, 1);
   await assert.rejects(gemini.generateCaptions(input, config(async () => json({}, 429))), (e) => e.code === "rate_limited" && /busy/.test(e.userMessage));
+});
+
+test("a persistently overloaded model (503) is reported as busy, not as a problem with the photo", async () => {
+  let calls = 0;
+  await assert.rejects(
+    gemini.generateCaptions(input, config(async () => { calls++; return json({ error: { status: "UNAVAILABLE" } }, 503); })),
+    (e) => e.code === "http_503" && /busy/.test(e.userMessage) && !/photo/.test(e.userMessage),
+  );
+  assert.equal(calls, 2);
+  await assert.rejects(gemini.generateCaptions(input, config(async () => json({}, 400))), (e) => /couldn’t caption this photo/.test(e.userMessage));
 });
 
 test("gives up after the retry budget on persistent failure", async () => {

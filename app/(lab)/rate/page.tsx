@@ -17,7 +17,7 @@ export default async function RatePage() {
   // and keep captions with no matching vote. Newest content leads.
   const { data, error } = await supabase
     .from("ai_captions")
-    .select("id, batch_id, caption, source_image_path, image_alt, tone, created_at, creator_id, caption_votes!left(id)")
+    .select("id, batch_id, caption, source_image_path, image_alt, tone, perspective, created_at, creator_id, caption_votes!left(id)")
     .is("caption_votes", null)
     .order("created_at", { ascending: false })
     .limit(FEED_SIZE);
@@ -40,16 +40,17 @@ export default async function RatePage() {
       imageUrl,
       imageAlt: row.image_alt || "Photo shared for captioning.",
       tone: row.tone,
+      perspective: row.perspective,
       mine: row.creator_id === userId,
     }] : [];
   });
 
   return (
-    <div className="mx-auto max-w-xl space-y-6">
+    <div className="mx-auto max-w-xl space-y-4 sm:space-y-6">
       <header className="space-y-2">
         <p className="eyebrow">Rate</p>
         <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Is it funny?</h1>
-        <p className="text-muted">One tap per caption. Fresh, unrated captions come first.</p>
+        <p className="hidden text-muted sm:block">One tap per caption. Fresh, unrated captions come first.</p>
       </header>
       {cards.length ? <RateDeck cards={cards} /> : <EmptyState />}
     </div>

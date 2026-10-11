@@ -5,7 +5,16 @@ import Link from "next/link";
 import { useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { MAX_CONTEXT_LENGTH, MEDIA_BUCKET, validateImageFile, type Tone } from "@/lib/captions/validation";
+import {
+  DEFAULT_PERSPECTIVE,
+  MAX_CONTEXT_LENGTH,
+  MEDIA_BUCKET,
+  PERSPECTIVES,
+  validateImageFile,
+  type Perspective,
+  type Tone,
+} from "@/lib/captions/validation";
+import { PERSPECTIVE_DISPLAY, PerspectiveBadge, ToneBadge } from "@/app/components/caption-badges";
 import { createCaptions, prepareUpload, type GenerateResult } from "./actions";
 
 type Phase = "idle" | "uploading" | "generating";
@@ -18,15 +27,22 @@ const TONE_LABELS: Record<Tone | "", { label: string; hint: string }> = {
   chaotic: { label: "Chaotic", hint: "Unhinged group-chat energy" },
 };
 
+const PERSPECTIVE_HINTS: Record<Perspective, string> = {
+  student: "Deadlines, roommates, being broke",
+  professor: "Grading, office hours, lectures",
+};
+
 export function CreateStudio({ vibe }: { vibe: { title: string; hint: string } }) {
   const router = useRouter();
   const inputId = useId();
   const fileInput = useRef<HTMLInputElement>(null);
   const resultHeading = useRef<HTMLHeadingElement>(null);
+  const submitButton = useRef<HTMLButtonElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState("");
   const [context, setContext] = useState("");
   const [tone, setTone] = useState<Tone | "">("");
+  const [perspective, setPerspective] = useState<Perspective>(DEFAULT_PERSPECTIVE);
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
@@ -58,6 +74,14 @@ export function CreateStudio({ vibe }: { vibe: { title: string; hint: string } }
     if (fileInput.current) fileInput.current.value = "";
   }
 
+  // Back to the form with the same photo, context, and tone, in the other voice.
+  function retryAs(next: Perspective) {
+    setPerspective(next);
+    setResult(null);
+    setError("");
+    setTimeout(() => submitButton.current?.focus());
+  }
+
   async function generate(event: React.FormEvent) {
     event.preventDefault();
     if (!file || busy) {
@@ -76,7 +100,7 @@ export function CreateStudio({ vibe }: { vibe: { title: string; hint: string } }
       if (uploadError) throw new Error("Your photo didn’t upload. Check your connection and try again.");
 
       setPhase("generating");
-      const generated = await createCaptions({ path: prepared.path, context, tone: tone || null });
+      const generated = await createCaptions({ path: prepared.path, context, tone: tone || null, perspective });
       if (generated.status !== "ok") throw new Error(generated.message);
       setResult(generated);
       router.refresh();
@@ -88,26 +112,39 @@ export function CreateStudio({ vibe }: { vibe: { title: string; hint: string } }
   }
 
   if (result) {
+    const other = result.perspective === "student" ? "professor" : "student";
     return (
       <section aria-labelledby="result-title" className="space-y-6">
         <header className="space-y-2">
           <p className="eyebrow">Posted to the feed</p>
           <h1 id="result-title" ref={resultHeading} tabIndex={-1} className="text-3xl font-bold tracking-tight sm:text-4xl">Three takes. Campus decides.</h1>
-          <p className="text-muted">All three captions are saved and in the rating feed now.</p>
+          <p className="text-muted">
+            All three captions are saved, in the rating feed, and on{" "}
+            <Link href="/explore" className="font-semibold text-brand-soft underline-offset-4 hover:text-white hover:underline">Explore</Link>.
+          </p>
         </header>
         <ol className="grid gap-4 md:grid-cols-3">
           {result.captions.map((caption, index) => (
-            <li key={caption.id} className="card card-enter" style={{ animationDelay: `${index * 80}ms` }}>
+            <li key={caption.id} className="card card-enter flex flex-col" style={{ animationDelay: `${index * 80}ms` }}>
               <div className="relative aspect-[4/5] bg-zinc-900">
                 {result.imageUrl && <Image src={result.imageUrl} alt={result.imageAlt} fill unoptimized sizes="(min-width: 768px) 320px, 100vw" className="object-cover" />}
                 <span className="absolute top-3 left-3 rounded-full bg-black/70 px-3 py-1 text-xs font-semibold text-white backdrop-blur">Take {index + 1}</span>
               </div>
-              <p className="p-5 text-lg leading-snug font-semibold text-pretty">{caption.caption}</p>
+              <div className="space-y-3 p-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <PerspectiveBadge perspective={result.perspective} />
+                  <ToneBadge tone={result.tone} />
+                </div>
+                <p className="text-lg leading-snug font-semibold text-pretty">{caption.caption}</p>
+              </div>
             </li>
           ))}
         </ol>
         <div className="flex flex-col gap-3 sm:flex-row">
           <Link href="/rate" className="btn-funny">Go rate the feed</Link>
+          <button type="button" className="btn-quiet" onClick={() => retryAs(other)}>
+            <span aria-hidden="true">{PERSPECTIVE_DISPLAY[other].icon}</span> Try a {other} take
+          </button>
           <button type="button" className="btn-quiet" onClick={reset}>Make another</button>
         </div>
       </section>
@@ -138,7 +175,7 @@ export function CreateStudio({ vibe }: { vibe: { title: string; hint: string } }
                 <span className="absolute inset-0 grid place-items-center bg-black/60 backdrop-blur-sm">
                   <span className="flex flex-col items-center gap-3 text-white">
                     <span aria-hidden="true" className="size-10 animate-spin rounded-full border-4 border-white/25 border-t-funny" />
-                    <span className="text-lg font-semibold">{phase === "uploading" ? "Uploading photo…" : "Writing 3 captions…"}</span>
+                    <span className="text-lg font-semibold">{phase === "uploading" ? "Uploading photo…" : `Writing 3 captions as a ${perspective}…`}</span>
                   </span>
                 </span>
               )}
@@ -166,6 +203,30 @@ export function CreateStudio({ vibe }: { vibe: { title: string; hint: string } }
       </div>
 
       <div className="space-y-7">
+        <fieldset disabled={busy}>
+          <legend className="font-semibold">Perspective</legend>
+          <p id={`${inputId}-perspective-help`} className="mt-1 mb-3 text-sm text-muted">Whose joke is it? The captions are written in this voice.</p>
+          <div className="grid grid-cols-2 gap-1 rounded-2xl border border-line bg-surface p-1">
+            {PERSPECTIVES.map((value) => (
+              <label key={value} className="relative block">
+                <input
+                  className="segment-input peer sr-only"
+                  type="radio"
+                  name="perspective"
+                  value={value}
+                  checked={perspective === value}
+                  aria-describedby={`${inputId}-perspective-help`}
+                  onChange={() => setPerspective(value)}
+                />
+                <span className="segment">
+                  <span className="font-semibold"><span aria-hidden="true">{PERSPECTIVE_DISPLAY[value].icon}</span> {PERSPECTIVE_DISPLAY[value].label}</span>
+                  <span className="segment-hint text-xs">{PERSPECTIVE_HINTS[value]}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+
         <div className="space-y-3">
           <div className="flex items-baseline justify-between gap-3">
             <label htmlFor={`${inputId}-context`} className="font-semibold">What should the AI know? <span className="font-normal text-muted">(optional)</span></label>
@@ -212,7 +273,7 @@ export function CreateStudio({ vibe }: { vibe: { title: string; hint: string } }
         </fieldset>
 
         <div className="space-y-3">
-          <button type="submit" className="btn-brand w-full text-lg" disabled={busy}>
+          <button ref={submitButton} type="submit" className="btn-brand w-full text-lg" disabled={busy}>
             {phase === "uploading" ? "Uploading…" : phase === "generating" ? "Writing captions…" : "Generate 3 captions"}
           </button>
           <div aria-live="assertive">

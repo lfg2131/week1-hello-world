@@ -14,6 +14,8 @@ import {
   parseGenerationOptions,
   sniffImageType,
   validateImageFile,
+  type Perspective,
+  type Tone,
 } from "@/lib/captions/validation";
 import { buildCaptionPrompt } from "@/lib/captions/prompt";
 import { GenerationError, generateCaptions, getGeminiConfig } from "@/lib/captions/gemini";
@@ -26,7 +28,15 @@ type Client = Awaited<ReturnType<typeof createClient>>;
 
 export type PrepareResult = { status: "ok"; path: string } | { status: "error"; message: string };
 export type GenerateResult =
-  | { status: "ok"; batchId: string; imageUrl: string; imageAlt: string; captions: { id: string; caption: string }[] }
+  | {
+    status: "ok";
+    batchId: string;
+    imageUrl: string;
+    imageAlt: string;
+    perspective: Perspective;
+    tone: Tone | null;
+    captions: { id: string; caption: string }[];
+  }
   | { status: "error"; message: string };
 
 const SESSION_EXPIRED = "Your session expired. Sign in again to create captions.";
@@ -71,12 +81,12 @@ export async function createCaptions(input: unknown): Promise<GenerateResult> {
   const userId = await getVerifiedUserId(supabase);
   if (!userId) return { status: "error", message: SESSION_EXPIRED };
 
-  const { path, context, tone } = (input ?? {}) as { path?: unknown; context?: unknown; tone?: unknown };
+  const { path, context, tone, perspective } = (input ?? {}) as { path?: unknown; context?: unknown; tone?: unknown; perspective?: unknown };
   if (!path) return { status: "error", message: "Choose a photo first." };
   // Only the caller's own folder: rejects other users' files, traversal, and URLs.
   if (!isOwnedImagePath(path, userId)) return { status: "error", message: "That upload couldn’t be found. Try adding the photo again." };
 
-  const options = parseGenerationOptions(context, tone);
+  const options = parseGenerationOptions(context, tone, perspective);
   if ("error" in options) {
     await removeUpload(supabase, path);
     return { status: "error", message: options.error };
@@ -119,6 +129,7 @@ export async function createCaptions(input: unknown): Promise<GenerateResult> {
       generation_prompt: prompt.persisted,
       user_context: options.context,
       tone: options.tone,
+      perspective: options.perspective,
       model: generated.model,
       image_alt: generated.altText,
     })))
@@ -130,6 +141,7 @@ export async function createCaptions(input: unknown): Promise<GenerateResult> {
 
   const { data: signed } = await supabase.storage.from(MEDIA_BUCKET).createSignedUrl(path, SIGNED_URL_SECONDS);
   revalidatePath("/rate");
+  revalidatePath("/explore");
   revalidatePath("/create");
   const order = new Map(generated.captions.map((caption, index) => [caption, index]));
   return {
@@ -137,6 +149,8 @@ export async function createCaptions(input: unknown): Promise<GenerateResult> {
     batchId,
     imageUrl: signed?.signedUrl ?? "",
     imageAlt: generated.altText,
+    perspective: options.perspective,
+    tone: options.tone,
     captions: [...rows].sort((a, b) => (order.get(a.caption) ?? 0) - (order.get(b.caption) ?? 0)),
   };
 }

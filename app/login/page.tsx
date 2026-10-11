@@ -11,7 +11,7 @@ export const metadata: Metadata = { title: "Sign in" };
 
 const steps = [
   ["Drop a photo", "Your 2am slice, the subway pigeon, your dorm at its worst."],
-  ["Get 3 AI captions", "Pick a vibe (clever, dry, or chaotic) and get three different takes."],
+  ["Get 3 AI captions", "Joke as a student or a professor, pick a vibe, and get three different takes."],
   ["Campus votes", "Rate everyone else’s. Funny or not funny. One tap."],
 ] as const;
 
@@ -24,7 +24,7 @@ export default async function LoginPage() {
         <Image
           src={hero}
           alt="A hand holds up a phone to film glowing city lights at night, the crowd around it in silhouette."
-          priority
+          preload
           placeholder="blur"
           sizes="(min-width: 1024px) 520px, 100vw"
           className="h-[46vh] min-h-72 w-full object-cover sm:h-[52vh] lg:h-[640px]"

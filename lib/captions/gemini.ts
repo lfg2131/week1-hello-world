@@ -152,8 +152,10 @@ async function requestCaptions(
   } catch {
     throw new GenerationError("The AI took too long or couldn’t be reached. Try again.", "network");
   }
-  if (response.status === 429) throw new GenerationError("The AI is busy right now. Wait a minute and try again.", "rate_limited");
-  if (!response.ok) throw new GenerationError("The AI couldn’t caption this photo. Try again.", `http_${response.status}`);
+  const busy = "The AI is busy right now. Wait a minute and try again.";
+  if (response.status === 429) throw new GenerationError(busy, "rate_limited");
+  // 5xx (e.g. 503 "high demand") is on Google's side, so don't blame the photo.
+  if (!response.ok) throw new GenerationError(response.status >= 500 ? busy : "The AI couldn’t caption this photo. Try again.", `http_${response.status}`);
   let payload: unknown;
   try {
     payload = await response.json();

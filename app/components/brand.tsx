@@ -4,7 +4,8 @@ export function BrandMark({ compact = false }: { compact?: boolean }) {
       <span aria-hidden="true" className="grid size-8 place-items-center rounded-xl bg-funny text-sm font-black text-zinc-950 shadow-lg shadow-lime-900/30">
         ha
       </span>
-      <span className={compact ? "text-base" : "text-lg"}>Caption Lab</span>
+      {/* The compact (app header) mark drops the name on phones to leave room for the tabs. */}
+      <span className={compact ? "hidden text-base sm:inline" : "text-lg"}>Caption Lab</span>
     </span>
   );
 }

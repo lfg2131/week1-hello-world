@@ -14,10 +14,12 @@ const okFetch = async () => new Response(JSON.stringify(geminiPayload()), { stat
 function createActions(options = {}, fetchImpl = okFetch) {
   const { client, calls } = fakeSupabase({ userId: USER, ...options });
   const { stubs, revalidated } = actionStubs(client);
-  let geminiCalls = 0;
-  const fetch = async (...args) => { geminiCalls++; return fetchImpl(...args); };
+  const requests = [];
+  const fetch = async (...args) => { requests.push(args); return fetchImpl(...args); };
   const actions = loadModule("app/(lab)/create/actions.ts", stubs, { fetch, env });
-  return { actions, calls, revalidated, geminiCalls: () => geminiCalls };
+  // What actually went over the wire to (mocked) Gemini.
+  const sent = (index = 0) => JSON.parse(requests[index][1].body);
+  return { actions, calls, revalidated, geminiCalls: () => requests.length, sent };
 }
 const inserts = (calls, table) => calls.filter((c) => c[0] === table && c[1] === "insert");
 const removed = (calls) => calls.some((c) => c[0] === "storage" && c[1] === "remove");
@@ -97,6 +99,67 @@ test("successful generation inserts 3 rows with auth-derived creator, shared bat
   }
   assert.ok(!removed(t.calls));
   assert.ok(t.revalidated.includes("/rate"));
+});
+
+for (const [perspective, label] of [["student", "Student"], ["professor", "Professor"]]) {
+  test(`${perspective} generation sends the ${perspective} perspective to Gemini and saves it on all 3 rows`, async () => {
+    const t = createActions();
+    const result = await t.actions.createCaptions({ path: PATH, context: "2am pizza", tone: "dry", perspective });
+    assert.equal(result.status, "ok");
+    assert.equal(result.perspective, perspective);
+    assert.equal(result.captions.length, 3);
+    assert.equal(t.geminiCalls(), 1);
+
+    const body = t.sent();
+    const userText = body.contents[0].parts[1].text;
+    assert.match(userText, new RegExp(`^Perspective: ${label}: write as a college ${perspective === "student" ? "student" : "professor or instructor"}`, "m"));
+
+    const [insert] = inserts(t.calls, "ai_captions");
+    const rows = insert[2];
+    assert.equal(rows.length, 3);
+    for (const row of rows) {
+      assert.equal(row.perspective, perspective);
+      assert.match(row.generation_prompt, new RegExp(`\\nPerspective: ${label}: `));
+      // The stored prompt is exactly what Gemini received.
+      assert.ok(row.generation_prompt.includes(body.systemInstruction.parts[0].text));
+      assert.ok(row.generation_prompt.includes(userText));
+      assert.equal(row.creator_id, USER);
+      assert.equal(row.tone, "dry");
+    }
+    assert.ok(t.revalidated.includes("/explore"));
+  });
+}
+
+test("perspective changes the prompt Gemini receives (same photo, context, and tone)", async () => {
+  const texts = {};
+  for (const perspective of ["student", "professor"]) {
+    const t = createActions();
+    await t.actions.createCaptions({ path: PATH, context: "2am pizza", tone: "dry", perspective });
+    texts[perspective] = t.sent().contents[0].parts[1].text;
+  }
+  assert.notEqual(texts.student, texts.professor);
+  assert.equal(texts.student.replace(/^Perspective: .*$/m, ""), texts.professor.replace(/^Perspective: .*$/m, ""));
+});
+
+test("perspective defaults to student when the request omits it", async () => {
+  const t = createActions();
+  const result = await t.actions.createCaptions({ path: PATH });
+  assert.equal(result.perspective, "student");
+  const rows = inserts(t.calls, "ai_captions")[0][2];
+  assert.deepEqual(plain(rows.map((row) => row.perspective)), ["student", "student", "student"]);
+  assert.match(t.sent().contents[0].parts[1].text, /^Perspective: Student: /m);
+});
+
+test("invalid perspective is rejected server-side before Gemini, nothing is saved, and the upload is removed", async () => {
+  for (const perspective of ["teacher", "Professor", "", "admin'; drop table ai_captions;--", 1, {}, ["professor"]]) {
+    const t = createActions();
+    const result = await t.actions.createCaptions({ path: PATH, perspective });
+    assert.equal(result.status, "error", JSON.stringify(perspective));
+    assert.match(result.message, /Student or Professor/);
+    assert.equal(t.geminiCalls(), 0);
+    assert.equal(inserts(t.calls, "ai_captions").length, 0);
+    assert.ok(removed(t.calls));
+  }
 });
 
 test("failed generation does not pretend success, inserts nothing, and removes the upload", async () => {

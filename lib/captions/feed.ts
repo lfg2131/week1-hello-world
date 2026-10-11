@@ -4,6 +4,7 @@ export type FeedRow = {
   caption: string;
   source_image_path: string;
   tone: string | null;
+  perspective: string;
   created_at: string;
   creator_id: string;
 };

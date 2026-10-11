@@ -33,7 +33,7 @@ function proxyFor(userId) {
 }
 const location = (r) => r.headers.get("location") && new URL(r.headers.get("location")).pathname;
 
-for (const path of ["/", "/rate", "/create", "/anything"]) test(`logged out ${path} -> /login`, async () => {
+for (const path of ["/", "/rate", "/explore", "/create", "/anything"]) test(`logged out ${path} -> /login`, async () => {
   const r = await proxyFor(null)(path);
   assert.equal(r.status, 307);
   assert.equal(location(r), "/login");
@@ -47,7 +47,7 @@ for (const path of ["/", "/login"]) test(`authenticated ${path} -> /rate`, async
   assert.equal(location(await proxyFor(USER)(path)), "/rate");
 });
 
-for (const path of ["/rate", "/create"]) test(`authenticated ${path} renders`, async () => {
+for (const path of ["/rate", "/explore", "/create"]) test(`authenticated ${path} renders`, async () => {
   assert.equal((await proxyFor(USER)(path)).status, 200);
 });
 

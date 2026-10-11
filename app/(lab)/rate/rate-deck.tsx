@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useState, useTransition } from "react";
+import { PerspectiveBadge, ToneBadge } from "@/app/components/caption-badges";
 import { submitVote } from "./actions";
 
 export type RateCard = {
@@ -11,6 +12,7 @@ export type RateCard = {
   imageUrl: string;
   imageAlt: string;
   tone: string | null;
+  perspective: string;
   mine: boolean;
 };
 
@@ -81,7 +83,8 @@ export function RateDeck({ cards }: { cards: RateCard[] }) {
       </div>
 
       <article key={card.id} className="card card-enter">
-        <div className="relative aspect-[4/5] max-h-[58vh] w-full bg-zinc-900 sm:max-h-[62vh]">
+        {/* Shorter photo on phones keeps the caption and vote buttons on screen. */}
+        <div className="relative aspect-[4/5] max-h-[42vh] w-full bg-zinc-900 sm:max-h-[62vh]">
           <Image
             src={card.imageUrl}
             alt={card.imageAlt}
@@ -89,12 +92,9 @@ export function RateDeck({ cards }: { cards: RateCard[] }) {
             unoptimized
             sizes="(min-width: 640px) 576px, 100vw"
             className="object-cover"
-            priority={index === 0}
+            preload={index === 0}
           />
-          <div className="absolute top-3 left-3 flex gap-2">
-            {card.mine && <span className="rounded-full bg-black/70 px-3 py-1 text-xs font-semibold text-white backdrop-blur">Your caption</span>}
-            {card.tone && <span className="rounded-full bg-black/70 px-3 py-1 text-xs font-medium text-zinc-200 capitalize backdrop-blur">{card.tone}</span>}
-          </div>
+          {card.mine && <span className="absolute top-3 left-3 rounded-full bg-black/70 px-3 py-1 text-xs font-semibold text-white backdrop-blur">Your caption</span>}
           {feedback?.kind === "saved" && (
             <div className="absolute inset-0 grid place-items-center bg-black/35">
               <p className={`vote-stamp rounded-2xl px-5 py-3 text-2xl font-black ${feedback.vote === 1 ? "bg-funny text-zinc-950" : "bg-white text-zinc-950"}`}>
@@ -105,9 +105,16 @@ export function RateDeck({ cards }: { cards: RateCard[] }) {
         </div>
 
         <div className="space-y-5 p-5 sm:p-6">
-          <h2 id="caption-heading" ref={headingRef} tabIndex={-1} className="text-xl leading-snug font-semibold text-balance sm:text-2xl">
-            {card.caption}
-          </h2>
+          <div className="space-y-3">
+            {/* The point of view tells the voter who is supposed to be joking. */}
+            <div className="flex flex-wrap items-center gap-2">
+              <PerspectiveBadge perspective={card.perspective} />
+              <ToneBadge tone={card.tone} />
+            </div>
+            <h2 id="caption-heading" ref={headingRef} tabIndex={-1} className="text-xl leading-snug font-semibold text-balance sm:text-2xl">
+              {card.caption}
+            </h2>
+          </div>
           <div className="grid grid-cols-2 gap-3" role="group" aria-label="Rate this caption">
             <button type="button" className="btn-funny" disabled={locked} onClick={() => vote(1)}>
               <span aria-hidden="true">😂</span> Funny
