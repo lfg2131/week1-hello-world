@@ -9,5 +9,5 @@ export async function signOut() {
   const { error } = await supabase.auth.signOut({ scope: "local" });
   if (error) throw new Error("Unable to sign out. Please try again.");
   revalidatePath("/", "layout");
-  redirect("/login");
+  redirect("/explore");
 }

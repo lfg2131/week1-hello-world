@@ -1,4 +1,4 @@
-import { CAPTION_COUNT, MAX_CAPTION_LENGTH, type ImageMimeType } from "./validation";
+import { CAPTION_COUNT, MAX_CAPTION_LENGTH, MAX_CAPTION_WORDS, countWords, type ImageMimeType } from "./validation";
 import type { CaptionPrompt } from "./prompt";
 
 // Gemini via the stable REST generateContent endpoint with structured JSON
@@ -15,7 +15,7 @@ export const CAPTION_SCHEMA = {
       type: "array",
       minItems: CAPTION_COUNT,
       maxItems: CAPTION_COUNT,
-      items: { type: "string", maxLength: 160 },
+      items: { type: "string", maxLength: 90 },
     },
   },
   required: ["alt_text", "captions"],
@@ -92,6 +92,11 @@ export function parseCaptionResponse(payload: unknown): { captions: string[]; al
     if (!value || value.length > MAX_CAPTION_LENGTH) throw new GenerationError("The AI returned an unusable caption. Try again.", "invalid_caption");
     return value;
   });
+  // Enforced here, not just requested in the prompt: an over-long caption is
+  // never saved; the batch is regenerated once instead.
+  if (cleaned.some((caption) => countWords(caption) > MAX_CAPTION_WORDS)) {
+    throw new GenerationError(`The AI wrote captions longer than ${MAX_CAPTION_WORDS} words. Try again.`, "too_many_words");
+  }
   if (cleaned.some(isUnsafeCaption)) {
     throw new GenerationError("The AI wrote something we won’t post. Try again.", "unsafe_output");
   }
@@ -103,7 +108,7 @@ export function parseCaptionResponse(payload: unknown): { captions: string[]; al
   return { captions: cleaned, altText: alt };
 }
 
-const RETRYABLE = new Set(["network", "http_500", "http_502", "http_503", "http_504", "unsafe_output", "duplicate_captions"]);
+const RETRYABLE = new Set(["network", "http_500", "http_502", "http_503", "http_504", "unsafe_output", "duplicate_captions", "too_many_words"]);
 
 type GenerateInput = { prompt: CaptionPrompt; image: Uint8Array; mimeType: ImageMimeType };
 type GenerateConfig = { apiKey: string; model: string; fetchImpl?: typeof fetch; timeoutMs?: number; attempts?: number; retryDelayMs?: number };

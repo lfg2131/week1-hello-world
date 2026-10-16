@@ -14,7 +14,8 @@ begin
   perform set_config('role','anon',true);
   perform set_config('request.jwt.claims','{"role":"anon"}',true);
   begin insert into public.ai_captions(batch_id,creator_id,source_image_path,caption,generation_prompt,model) values (gen_random_uuid(),a,img,'x','p','m'); r:=r||'FAIL anon insert captions;'; exception when insufficient_privilege then r:=r||'ok anon insert captions denied;'; end;
-  begin perform 1 from public.ai_captions limit 1; r:=r||'FAIL anon select captions;'; exception when insufficient_privilege then r:=r||'ok anon select captions denied;'; end;
+  -- Week 6: public Explore lets anon read display columns, never the prompt.
+  begin perform generation_prompt from public.ai_captions limit 1; r:=r||'FAIL anon select prompt;'; exception when insufficient_privilege then r:=r||'ok anon select prompt denied;'; end;
   begin insert into public.caption_votes(caption_id,user_id,vote) values (gen_random_uuid(),a,1); r:=r||'FAIL anon vote;'; exception when insufficient_privilege then r:=r||'ok anon vote denied;'; end;
   begin perform 1 from public.caption_votes limit 1; r:=r||'FAIL anon select votes;'; exception when insufficient_privilege then r:=r||'ok anon select votes denied;'; end;
   begin insert into storage.objects(bucket_id,name,owner_id) values ('week4-media', img, a::text); r:=r||'FAIL anon upload;'; exception when insufficient_privilege or check_violation then r:=r||'ok anon upload denied;'; end;

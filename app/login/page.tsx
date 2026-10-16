@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import Image from "next/image";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import GoogleSignIn from "./google-sign-in";
 import { createClient } from "@/lib/supabase/server";
-import { getVerifiedUserId } from "@/lib/auth";
+import { getVerifiedUserId, safeReturnPath } from "@/lib/auth";
 import { BrandMark } from "@/app/components/brand";
 import hero from "@/public/login-hero.jpg";
 
@@ -15,8 +16,9 @@ const steps = [
   ["Campus votes", "Rate everyone else’s. Funny or not funny. One tap."],
 ] as const;
 
-export default async function LoginPage() {
-  if (await getVerifiedUserId(await createClient())) redirect("/rate");
+export default async function LoginPage({ searchParams }: PageProps<"/login">) {
+  const next = safeReturnPath((await searchParams).next);
+  if (await getVerifiedUserId(await createClient())) redirect(next);
 
   return (
     <main className="mx-auto grid w-full max-w-6xl flex-1 items-center gap-10 px-4 pb-12 sm:px-6 lg:grid-cols-[1.05fr_1fr] lg:gap-16 lg:py-12">
@@ -53,8 +55,11 @@ export default async function LoginPage() {
         </div>
 
         <div className="max-w-sm space-y-3">
-          <GoogleSignIn />
-          <p className="text-sm text-muted">Signed-in students only. We use your Google account just to sign you in.</p>
+          <GoogleSignIn next={next} />
+          <p className="text-sm text-muted">Sign in to vote and create. We use your Google account just to sign you in.</p>
+          <Link href="/explore" className="inline-block rounded-lg text-sm font-semibold text-brand-soft underline-offset-4 hover:text-white hover:underline">
+            Just browsing? See the captions on Explore →
+          </Link>
         </div>
 
         <ol className="grid max-w-xl gap-3 sm:grid-cols-3">

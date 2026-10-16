@@ -6,6 +6,14 @@ export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MAX_CONTEXT_LENGTH = 200;
 export const CAPTION_COUNT = 3;
 export const MAX_CAPTION_LENGTH = 200;
+/** Week 6: every new or edited caption is at most ten words (DB check ai_captions_caption_max_words). */
+export const MAX_CAPTION_WORDS = 10;
+
+/** Words = runs of non-whitespace, matching the database constraint. */
+export function countWords(text: string) {
+  const trimmed = text.trim();
+  return trimmed ? trimmed.split(/\s+/).length : 0;
+}
 
 export const IMAGE_TYPES = {
   "image/jpeg": "jpg",

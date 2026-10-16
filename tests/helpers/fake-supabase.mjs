@@ -13,6 +13,7 @@ export function fakeSupabase({
   voteError = null,
   rows = [],
   selectError = null,
+  votes = [],
 } = {}) {
   const calls = [];
   const builder = (table) => {
@@ -31,12 +32,14 @@ export function fakeSupabase({
         return { data: { caption_id: insert[1].caption_id, vote: insert[1].vote }, error: null };
       }
       if (select?.[2]?.head) return { count: hourlyCount, error: countError };
+      // The viewer's own votes (RLS: own rows only), e.g. on Explore.
+      if (table === "caption_votes") return { data: votes, error: null };
       // Feed reads (Rate, Explore, recent drops) get `rows` exactly as the database would order them.
       return selectError ? { data: null, error: selectError } : { data: rows, error: null };
     };
     const query = {
       select: record("select"), insert: record("insert"), eq: record("eq"), gte: record("gte"),
-      is: record("is"), order: record("order"), limit: record("limit"),
+      is: record("is"), in: record("in"), order: record("order"), limit: record("limit"),
       update: record("update"), delete: record("delete"), upsert: record("upsert"),
       single: () => { state.ops.push(["single"]); return Promise.resolve(resolveQuery()); },
       then: (resolve, reject) => Promise.resolve(resolveQuery()).then(resolve, reject),

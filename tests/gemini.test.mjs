@@ -100,3 +100,35 @@ test("config requires a server-side key and a sane model id", () => {
   assert.deepEqual({ ...gemini.getGeminiConfig({ GEMINI_API_KEY: "k" }) }, { apiKey: "k", model: "gemini-3.8-flash" });
   assert.equal(gemini.getGeminiConfig({ GEMINI_API_KEY: "k", GEMINI_MODEL: "gemini-3.5-flash" }).model, "gemini-3.5-flash");
 });
+
+// ---- Week 6: ten-word captions -------------------------------------------
+const ELEVEN = "one two three four five six seven eight nine ten eleven";
+const TEN = "one two three four five six seven eight nine ten";
+
+test("accepts captions of exactly ten words and rejects any caption over ten", () => {
+  assert.equal(gemini.parseCaptionResponse(geminiPayload([TEN, CAPTIONS[1], CAPTIONS[2]])).captions[0], TEN);
+  assert.throws(() => gemini.parseCaptionResponse(geminiPayload([CAPTIONS[0], ELEVEN, CAPTIONS[2]])), (e) => e.code === "too_many_words" && /10 words/.test(e.userMessage));
+  // Extra whitespace does not hide extra words.
+  assert.throws(() => gemini.parseCaptionResponse(geminiPayload([ELEVEN.replaceAll(" ", "  \n"), CAPTIONS[1], CAPTIONS[2]])), (e) => e.code === "too_many_words");
+});
+
+test("an over-long batch is regenerated once (bounded), never saved", async () => {
+  let calls = 0;
+  const responses = [json(geminiPayload([ELEVEN, CAPTIONS[1], CAPTIONS[2]])), json(geminiPayload())];
+  const result = await gemini.generateCaptions(input, config(async () => { calls++; return responses.shift(); }));
+  assert.equal(calls, 2);
+  assert.deepEqual([...result.captions], CAPTIONS);
+
+  calls = 0;
+  await assert.rejects(
+    gemini.generateCaptions(input, config(async () => { calls++; return json(geminiPayload([ELEVEN, CAPTIONS[1], CAPTIONS[2]])); })),
+    (e) => e.code === "too_many_words",
+  );
+  assert.equal(calls, 2);
+});
+
+test("the prompt and the response schema both state the ten-word limit", () => {
+  assert.match(prompt.systemInstruction, /at most 10 words/);
+  assert.match(prompt.userPrompt, /^Write 3 captions for the attached photo, each at most 10 words\./);
+  assert.ok(gemini.CAPTION_SCHEMA.properties.captions.items.maxLength <= 100);
+});

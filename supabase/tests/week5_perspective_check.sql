@@ -12,7 +12,9 @@ begin
   perform set_config('role','anon',true);
   perform set_config('request.jwt.claims','{"role":"anon"}',true);
   begin insert into public.ai_captions(batch_id,creator_id,source_image_path,caption,generation_prompt,model,perspective) values (gen_random_uuid(),a,img,'x','p','m','professor'); r:=r||'FAIL anon insert;'; exception when insufficient_privilege then r:=r||'ok anon insert denied;'; end;
-  begin perform perspective from public.ai_captions limit 1; r:=r||'FAIL anon read;'; exception when insufficient_privilege then r:=r||'ok anon read denied;'; end;
+  -- Week 6: perspective is a public Explore display column; the prompt is not.
+  begin perform perspective from public.ai_captions limit 1; r:=r||'ok anon reads perspective (public Explore);'; exception when insufficient_privilege then r:=r||'FAIL anon cannot read perspective;'; end;
+  begin perform generation_prompt from public.ai_captions limit 1; r:=r||'FAIL anon read prompt;'; exception when insufficient_privilege then r:=r||'ok anon prompt denied;'; end;
 
   perform set_config('role','authenticated',true);
   perform set_config('request.jwt.claims',json_build_object('sub',a,'role','authenticated')::text,true);

@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { getSupabaseEnv } from "./env";
-import { getVerifiedUserId, isPublicPath } from "../auth";
+import { RETURN_PATHS, getVerifiedUserId, isPublicPath, safeReturnPath } from "../auth";
 
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request });
@@ -25,11 +25,16 @@ export async function updateSession(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Default-deny: every app route needs a session except the explicit public
-  // auth routes. Pages and actions verify identity again on their own.
+  // routes (Explore, login, OAuth callback). Pages and actions verify again.
   let target: string | null = null;
-  if (!userId && !isPublicPath(pathname)) target = "/login";
-  else if (userId && (pathname === "/" || pathname === "/login")) target = "/rate";
-  else if (!userId && pathname === "/") target = "/login";
+  if (pathname === "/") target = "/explore";
+  else if (userId && pathname === "/login") target = safeReturnPath(request.nextUrl.searchParams.get("next"));
+  else if (!userId && pathname.startsWith("/api/")) {
+    return NextResponse.json({ status: "error", message: "Your session expired. Sign in again." }, { status: 401, headers: { "Cache-Control": "private, no-store" } });
+  } else if (!userId && !isPublicPath(pathname)) {
+    // Remember allow-listed destinations so sign-in returns there.
+    target = (RETURN_PATHS as readonly string[]).includes(pathname) ? `/login?next=${pathname}` : "/login";
+  }
 
   if (target) {
     const redirect = NextResponse.redirect(new URL(target, request.url));

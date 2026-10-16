@@ -34,46 +34,80 @@ const ROWS = [
   row("s3", "batch-old", IMG_OLD, USER, "student", null, "2026-10-05T19:00:00.000+00:00", "Group project fuel, budget edition."),
 ];
 
-async function renderExplore(options = {}) {
+const voteStub = { "@/app/(lab)/rate/actions": { submitVote: async () => ({ status: "saved", captionId: CAPTION_ID, vote: 1 }) } };
+
+async function renderExplore(options = {}, { searchParams = {} } = {}) {
   const { client, calls } = fakeSupabase({ userId: USER, rows: ROWS, ...options });
-  const page = loadModule("app/(lab)/explore/page.tsx", { ...ui, ...signedIn(client) }).default;
-  return { html: renderToStaticMarkup(await page()), calls };
+  const page = loadModule("app/(lab)/explore/page.tsx", { ...ui, ...voteStub, "@/lib/supabase/server": { createClient: async () => client } }).default;
+  return { html: renderToStaticMarkup(await page({ searchParams: Promise.resolve(searchParams) })), calls };
 }
 
-test("Explore reads every generated caption from every creator, newest first, with no vote or creator filter", async () => {
+test("Explore reads every caption from every creator, newest first; images signed once per photo", async () => {
   const { calls } = await renderExplore();
   const query = calls.filter((call) => call[0] === "ai_captions");
   const select = query.find((call) => call[1] === "select")[2];
-  for (const column of ["caption", "source_image_path", "image_alt", "perspective", "tone", "batch_id", "created_at"]) assert.match(select, new RegExp(`\\b${column}\\b`));
-  assert.doesNotMatch(select, /caption_votes/);
+  for (const column of ["caption", "source_image_path", "image_alt", "perspective", "tone", "batch_id", "created_at", "creator_id"]) assert.match(select, new RegExp(`\\b${column}\\b`));
+  assert.doesNotMatch(select, /caption_votes|generation_prompt|user_context|model/);
   assert.deepEqual(plain(query.find((call) => call[1] === "order")), ["ai_captions", "order", "created_at", { ascending: false }]);
   assert.ok(!query.some((call) => ["eq", "is", "gte", "insert", "update", "delete", "upsert"].includes(call[1])));
-  // Images come from the private bucket as signed URLs, once per post.
   const sign = calls.find((call) => call[1] === "signMany");
   assert.equal(sign[2], "week4-media");
   assert.deepEqual(plain(sign[3]), [IMG_NEW, IMG_OLD]);
 });
 
-test("Explore cards show each post's image, its captions, and the perspective, newest post first", async () => {
+test("Explore shows one card per caption: image, caption, perspective badge, and Funny / Not funny", async () => {
   const { html } = await renderExplore();
   assert.match(html, /See what everyone made/);
-  assert.match(html, /2 posts · 6 captions/);
-  assert.match(html, new RegExp(`<img src="https://signed.example/${IMG_NEW}" alt="Alt for batch-new"`));
-  assert.match(html, new RegExp(`<img src="https://signed.example/${IMG_OLD}" alt="Alt for batch-old"`));
-  for (const caption of ["Attendance today: me and the projector.", "Office hours, now with a waitlist of zero.", "My meal plan could never."]) assert.ok(html.includes(caption), caption);
-  assert.ok(html.indexOf("Attendance today") < html.indexOf("Dinner, breakfast"), "newest post first");
-  assert.ok(html.indexOf("Professor perspective") < html.indexOf("Student perspective"));
-  assert.equal(html.match(/Professor perspective/g).length, 1);
-  assert.equal(html.match(/Student perspective/g).length, 1);
-  assert.match(html, /<time dateTime="2026-10-11T15:00:00.000\+00:00"/);
-  // Only the viewer's own (older, student) post is marked.
-  assert.equal(html.match(/Your post/g).length, 1);
-  const mine = html.indexOf("Your post");
-  assert.ok(html.indexOf("Attendance today") < mine && mine < html.indexOf("Student perspective"));
-  // Captions are escaped text, never HTML; no vote data is shown.
+  assert.match(html, /6 captions · 2 photos/);
+  const cards = html.match(/<article/g);
+  assert.equal(cards.length, 6);
+  // The same stored image repeats on each of its three caption cards (no duplicate files).
+  assert.equal(html.match(new RegExp(`<img src="https://signed.example/${IMG_NEW}" alt="Alt for batch-new"`, "g")).length, 3);
+  assert.equal(html.match(new RegExp(`<img src="https://signed.example/${IMG_OLD}" alt="Alt for batch-old"`, "g")).length, 3);
+  assert.equal(html.match(/Professor perspective/g).length, 3);
+  assert.equal(html.match(/Student perspective/g).length, 3);
+  assert.equal(html.match(/😂<\/span> Funny/g).length, 6);
+  assert.equal(html.match(/😐<\/span> Not funny/g).length, 6);
+  for (const id of ["p1", "p2", "p3", "s1", "s2", "s3"]) assert.match(html, new RegExp(`id="caption-${id}"`));
+  assert.ok(html.indexOf("Attendance today") < html.indexOf("Dinner, breakfast"), "newest first");
+  // Only the viewer's own captions are marked.
+  assert.equal(html.match(/Your post/g).length, 3);
   assert.ok(!html.includes("<script>"));
   assert.ok(html.includes("&lt;script&gt;"));
-  assert.doesNotMatch(html, /vote|Funny ✓/i);
+  assert.doesNotMatch(html, /browsing as a guest/);
+});
+
+test("Explore is public: a signed-out visitor reads only display columns and sees sign-in prompts", async () => {
+  const { html, calls } = await renderExplore({ userId: null });
+  const select = calls.find((call) => call[0] === "ai_captions" && call[1] === "select")[2];
+  assert.equal(select, "id, batch_id, caption, source_image_path, image_alt, tone, perspective, created_at");
+  assert.ok(!calls.some((call) => call[0] === "caption_votes"), "no vote reads for guests");
+  assert.equal(html.match(/<article/g).length, 6);
+  assert.match(html, /browsing as a guest/);
+  assert.match(html, /href="\/login\?next=\/explore"/);
+  assert.doesNotMatch(html, /Your post/);
+  // Voting buttons are visible to guests; clicking asks them to sign in (see VoteButtons test).
+  assert.equal(html.match(/😂<\/span> Funny/g).length, 6);
+});
+
+test("Explore restores the viewer's existing votes after a reload", async () => {
+  const { html, calls } = await renderExplore({ votes: [{ caption_id: "p1", vote: 1 }, { caption_id: "s2", vote: -1 }] });
+  const voteCalls = calls.filter((call) => call[0] === "caption_votes");
+  assert.deepEqual(plain(voteCalls.find((call) => call[1] === "eq")), ["caption_votes", "eq", "user_id", USER]);
+  assert.deepEqual(plain(voteCalls.find((call) => call[1] === "in")[3]), ["p1", "p2", "p3", "s1", "s2", "s3"]);
+  assert.ok(!voteCalls.some((call) => call[1] === "insert"));
+  assert.match(html, /You voted Funny/);
+  assert.match(html, /You voted Not funny/);
+  assert.equal(html.match(/😂<\/span> Funny/g).length, 4);
+});
+
+test("Explore highlights a just-generated batch linked from the notification", async () => {
+  const batch = "88888888-8888-4888-8888-888888888888";
+  const rows = ROWS.map((r) => (r.batch_id === "batch-new" ? { ...r, batch_id: batch } : r));
+  const { html } = await renderExplore({ rows }, { searchParams: { batch } });
+  assert.equal(html.match(/card-new/g).length, 3);
+  assert.equal(html.match(/>New</g).length, 3);
+  assert.doesNotMatch((await renderExplore({}, { searchParams: { batch: "javascript:alert(1)" } })).html, /card-new/);
 });
 
 test("Explore shows a helpful empty state that links to Create", async () => {
@@ -87,15 +121,16 @@ test("Explore fails loudly (error boundary) instead of showing an empty feed whe
   await assert.rejects(renderExplore({ selectError: { message: "boom" } }), /Failed to load Explore/);
 });
 
-test("Explore redirects signed-out visitors to /login before reading any captions", async () => {
-  const { client, calls } = fakeSupabase({ userId: null, rows: ROWS });
-  const page = loadModule("app/(lab)/explore/page.tsx", {
-    ...ui,
-    "./server": { createClient: async () => client },
-    "next/navigation": { redirect: (path) => { throw new Error(`REDIRECT:${path}`); } },
-  }).default;
-  await assert.rejects(page(), /REDIRECT:\/login/);
-  assert.ok(!calls.some((call) => call[0] === "ai_captions"));
+test("VoteButtons: guests are asked to sign in and nothing is submitted", () => {
+  let submitted = 0;
+  const { VoteButtons } = loadModule("app/(lab)/explore/vote-buttons.tsx", { ...ui, "@/app/(lab)/rate/actions": { submitVote: async () => { submitted++; return {}; } } });
+  const guest = renderToStaticMarkup(React.createElement(VoteButtons, { captionId: CAPTION_ID, initialVote: null, signedIn: false }));
+  assert.match(guest, /Funny/);
+  assert.match(guest, /Not funny/);
+  const voted = renderToStaticMarkup(React.createElement(VoteButtons, { captionId: CAPTION_ID, initialVote: -1, signedIn: true }));
+  assert.match(voted, /You voted Not funny/);
+  assert.doesNotMatch(voted, /<button/);
+  assert.equal(submitted, 0);
 });
 
 test("Rate shows a subtle perspective badge on the card and still serves only unrated captions", async () => {
@@ -115,9 +150,7 @@ test("Rate shows a subtle perspective badge on the card and still serves only un
 test("Create offers a two-option Perspective control that defaults to Student", () => {
   const { CreateStudio } = loadModule("app/(lab)/create/create-studio.tsx", {
     ...ui,
-    "next/navigation": { useRouter: () => ({ refresh() {} }) },
-    "@/lib/supabase/client": { createClient: () => ({}) },
-    "./actions": { createCaptions: async () => ({}), prepareUpload: async () => ({}) },
+    "../generation-provider": { useGeneration: () => ({ job: null, busy: false, start: () => true, dismiss() {} }) },
   });
   const html = renderToStaticMarkup(React.createElement(CreateStudio, { vibe: { title: "2am dollar slice", hint: "First time trying dollar pizza at 2am" } }));
   assert.match(html, /<legend[^>]*>Perspective<\/legend>/);
@@ -129,7 +162,7 @@ test("Create offers a two-option Perspective control that defaults to Student", 
   assert.doesNotMatch(radios[1], /checked/);
   assert.ok(html.indexOf("Student") < html.indexOf("Professor"));
   // The existing inputs are all still there.
-  for (const text of ["Add a photo", "What should the AI know?", "Tone", "Surprise me", "Generate 3 captions"]) assert.ok(html.includes(text), text);
+  for (const text of ["Add a photo", "What should the AI know?", "Tone", "Surprise me", "Generate 3 captions", "up to 10 words"]) assert.ok(html.includes(text), text);
 });
 
 function plain(value) {

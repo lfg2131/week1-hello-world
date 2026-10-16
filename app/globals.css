@@ -128,7 +128,16 @@ body {
   animation: card-in 220ms ease-out both;
 }
 
+.toast {
+  animation: card-in 200ms ease-out both;
+}
+
+/* A just-generated caption linked from the notification. */
+.card-new {
+  @apply ring-2 ring-funny/70;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .vote-stamp, .card-enter { animation: none; }
+  .vote-stamp, .card-enter, .toast { animation: none; }
   * { transition-duration: 0ms !important; }
 }

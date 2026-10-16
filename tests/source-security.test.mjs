@@ -11,6 +11,8 @@ const source = appFiles.map(read).join("\n");
 const sql = (week) => files.filter((p) => new RegExp(`^supabase/migrations/.*${week}.*\\.sql$`).test(p)).map(read).join("\n").replace(/--[^\n]*/g, "").toLowerCase();
 const migrations = sql("week4");
 const week5 = sql("week5");
+const week6 = sql("week6_public");
+const week6Admin = sql("week6_admin");
 
 test("OAuth uses the exact callback and verified identity only", () => {
   assert.match(read("app/login/google-sign-in.tsx"), /signInWithOAuth\(\{\s*provider: "google",\s*options: \{\s*redirectTo: `\$\{window.location.origin\}\/auth\/callback`,\s*\},\s*\}\)/);
@@ -79,17 +81,73 @@ test("perspective is parsed on the server and saved from the parsed value, never
   const action = read("app/(lab)/create/actions.ts");
   assert.match(action, /parseGenerationOptions\(context, tone, perspective\)/);
   assert.match(action, /perspective: options\.perspective,/);
-  assert.match(read("app/(lab)/create/create-studio.tsx"), /createCaptions\(\{[^}]*\bperspective\b[^}]*\}\)/);
+  assert.match(read("app/(lab)/create/create-studio.tsx"), /start\(\{[^}]*\bperspective\b[^}]*\}\)/);
+  assert.match(read("app/(lab)/generation-provider.tsx"), /requestCaptions\(\{[^}]*\bperspective: input\.perspective\b[^}]*\}\)/);
   assert.match(read("lib/captions/prompt.ts"), /Perspective: \$\{PERSPECTIVE_GUIDANCE\[perspective\]\}/);
 });
 
-test("Explore is a signed-in page that never exposes vote data", () => {
+test("Explore is public but reads only display data; Rate and Create stay protected", () => {
   const page = read("app/(lab)/explore/page.tsx");
-  assert.match(page, /await requireUser\(\)/);
-  assert.doesNotMatch(page, /caption_votes|"use client"|service_role/);
-  assert.match(page, /<Image[\s\S]*?alt=\{post\.imageAlt \|\| /);
-  assert.match(read("app/(lab)/lab-nav.tsx"), /"\/rate"[\s\S]*"\/explore"[\s\S]*"\/create"/);
-  assert.ok(!files.some((p) => /^app\/explore\//.test(p)), "Explore lives inside the protected (lab) layout");
+  assert.doesNotMatch(page, /requireUser|"use client"|service_role|generation_prompt|user_context|email/);
+  assert.match(page, /select\(userId \? SIGNED_IN_EXPLORE_COLUMNS : PUBLIC_EXPLORE_COLUMNS\)/);
+  // Votes: only the viewer's own, and only when signed in.
+  assert.match(page, /if \(userId && cards\.length\)[\s\S]*from\("caption_votes"\)[\s\S]*\.eq\("user_id", userId\)/);
+  assert.match(page, /<Image[\s\S]*?alt=\{card\.imageAlt \|\| /);
+  for (const protectedPage of ["app/(lab)/rate/page.tsx", "app/(lab)/create/page.tsx"]) assert.match(read(protectedPage), /await requireUser\(\)/, protectedPage);
+  assert.match(read("lib/auth.ts"), /PUBLIC_PATHS = \["\/explore", "\/login", "\/auth\/callback"\] as const/);
+  assert.doesNotMatch(read("app/(lab)/layout.tsx"), /requireUser/);
+  assert.match(read("app/(lab)/lab-nav.tsx"), /"\/explore"[\s\S]*"\/rate"[\s\S]*"\/create"/);
+});
+
+test("Explore votes reuse the verified Rate action; the browser never sends a user id", () => {
+  const buttons = read("app/(lab)/explore/vote-buttons.tsx");
+  assert.match(buttons, /import \{ submitVote \} from "@\/app\/\(lab\)\/rate\/actions"/);
+  assert.match(buttons, /submitVote\(captionId, value\)/);
+  assert.doesNotMatch(buttons, /user_?[iI]d/);
+  assert.match(buttons, /if \(!signedIn\) \{\s*setAskSignIn\(true\);\s*return;/);
+});
+
+test("generation runs through a JSON Route Handler that re-verifies the session", () => {
+  const routeSource = read("app/api/captions/route.ts");
+  assert.match(routeSource, /createCaptions\(body\)/);
+  assert.match(routeSource, /application\/json/);
+  assert.match(routeSource, /export const maxDuration = 60/);
+  assert.match(read("app/(lab)/create/actions.ts"), /const userId = await getVerifiedUserId\(supabase\);\s*if \(!userId\) return \{ status: "error", message: SESSION_EXPIRED \};[\s\S]*export async function createCaptions/);
+  assert.match(read("app/(lab)/layout.tsx"), /<GenerationProvider>/);
+});
+
+test("Week 6 migration: narrow anon read, ten-word check, locked-down admin table", () => {
+  // Anon: SELECT on display columns only; never prompts, context, model, creator; never writes.
+  assert.match(week6, /grant select \(id, batch_id, caption, source_image_path, image_alt, tone, perspective, created_at\)\s+on table public\.ai_captions to anon;/);
+  assert.doesNotMatch(week6, /grant[^;]*(generation_prompt|user_context|creator_id|model)[^;]*to anon/);
+  assert.doesNotMatch(week6, /grant (insert|update|delete|all)[^;]*to (anon|authenticated)/);
+  assert.match(week6, /create policy "week6_ai_captions_select_anon"\s+on public\.ai_captions for select to anon/);
+  // Storage: anon may read only images behind a published caption; the bucket stays private.
+  assert.match(week6, /on storage\.objects for select to anon\s+using \(\s*bucket_id = 'week4-media'\s+and exists \(select 1 from public\.ai_captions c where c\.source_image_path = objects\.name\)/);
+  assert.doesNotMatch(week6, /public = true|update storage\.buckets/);
+  // Ten words, enforced for new rows and edits without rewriting history.
+  assert.match(week6, /add constraint ai_captions_caption_max_words[\s\S]*<= 10\)\s+not valid;/);
+  // Admin membership: RLS on, no client grants, no policies, service role read-only.
+  assert.match(week6, /alter table public\.caption_lab_admins enable row level security/);
+  assert.match(week6, /revoke all on table public\.caption_lab_admins from public, anon, authenticated/);
+  assert.match(week6, /grant select on table public\.caption_lab_admins to service_role/);
+  assert.doesNotMatch(week6, /policy[^;]*caption_lab_admins/);
+  assert.doesNotMatch(week6, /profiles|caption_votes|drop table|truncate|disable row level security|delete from|insert into/);
+});
+
+test("Week 6 admin grants: service role only, least privilege, no client roles", () => {
+  assert.doesNotMatch(week6Admin, /\b(anon|authenticated)\b|policy|row level security|revoke|drop|truncate/);
+  assert.match(week6Admin, /grant update \(caption, tone, perspective\) on table public\.ai_captions to service_role;/);
+  assert.match(week6Admin, /grant select on table public\.caption_votes to service_role;/);
+  assert.doesNotMatch(week6Admin, /grant (insert|update|delete)[^;]*caption_votes/);
+  assert.doesNotMatch(week6Admin, /grant update(?! \(caption, tone, perspective\))/);
+});
+
+test("ten words is enforced server-side for every generated caption", () => {
+  const gemini = read("lib/captions/gemini.ts");
+  assert.match(gemini, /countWords\(caption\) > MAX_CAPTION_WORDS/);
+  assert.match(gemini, /"too_many_words"\]\);/);
+  assert.match(read("lib/captions/prompt.ts"), /at most 10 words/);
 });
 
 test("Week 3 profile UX and the Week 2 table are gone from the product", () => {

@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { RETURN_COOKIE, type ReturnPath } from "@/lib/auth";
 
-export default function GoogleSignIn() {
+export default function GoogleSignIn({ next }: { next: ReturnPath }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -11,6 +12,8 @@ export default function GoogleSignIn() {
     setLoading(true);
     setError("");
     try {
+      // Where to land after Google; the callback re-validates it against an allow-list.
+      document.cookie = `${RETURN_COOKIE}=${next}; Path=/; Max-Age=600; SameSite=Lax; Secure`;
       const supabase = createClient();
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",

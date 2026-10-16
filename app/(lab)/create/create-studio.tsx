@@ -3,22 +3,17 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useId, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
 import {
   DEFAULT_PERSPECTIVE,
+  MAX_CAPTION_WORDS,
   MAX_CONTEXT_LENGTH,
-  MEDIA_BUCKET,
   PERSPECTIVES,
   validateImageFile,
   type Perspective,
   type Tone,
 } from "@/lib/captions/validation";
 import { PERSPECTIVE_DISPLAY, PerspectiveBadge, ToneBadge } from "@/app/components/caption-badges";
-import { createCaptions, prepareUpload, type GenerateResult } from "./actions";
-
-type Phase = "idle" | "uploading" | "generating";
-type Success = Extract<GenerateResult, { status: "ok" }>;
+import { useGeneration } from "../generation-provider";
 
 const TONE_LABELS: Record<Tone | "", { label: string; hint: string }> = {
   "": { label: "Surprise me", hint: "One of each" },
@@ -33,7 +28,8 @@ const PERSPECTIVE_HINTS: Record<Perspective, string> = {
 };
 
 export function CreateStudio({ vibe }: { vibe: { title: string; hint: string } }) {
-  const router = useRouter();
+  // Generation lives in the layout's provider so leaving this page never cancels it.
+  const { job, busy, start, dismiss } = useGeneration();
   const inputId = useId();
   const fileInput = useRef<HTMLInputElement>(null);
   const resultHeading = useRef<HTMLHeadingElement>(null);
@@ -43,11 +39,12 @@ export function CreateStudio({ vibe }: { vibe: { title: string; hint: string } }
   const [context, setContext] = useState("");
   const [tone, setTone] = useState<Tone | "">("");
   const [perspective, setPerspective] = useState<Perspective>(DEFAULT_PERSPECTIVE);
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [error, setError] = useState("");
+  const [formError, setFormError] = useState("");
   const [dragging, setDragging] = useState(false);
-  const [result, setResult] = useState<Success | null>(null);
-  const busy = phase !== "idle";
+  const result = job?.status === "success" ? job.result : null;
+  const error = formError || (job?.status === "error" ? job.message : "");
+  const phase = job?.status === "uploading" || job?.status === "generating" ? job.status : "idle";
+  const setError = setFormError;
 
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
   useEffect(() => { if (result) resultHeading.current?.focus(); }, [result]);
@@ -69,7 +66,7 @@ export function CreateStudio({ vibe }: { vibe: { title: string; hint: string } }
     setPreview("");
     setContext("");
     setTone("");
-    setResult(null);
+    dismiss();
     setError("");
     if (fileInput.current) fileInput.current.value = "";
   }
@@ -77,38 +74,20 @@ export function CreateStudio({ vibe }: { vibe: { title: string; hint: string } }
   // Back to the form with the same photo, context, and tone, in the other voice.
   function retryAs(next: Perspective) {
     setPerspective(next);
-    setResult(null);
+    dismiss();
     setError("");
     setTimeout(() => submitButton.current?.focus());
   }
 
-  async function generate(event: React.FormEvent) {
+  function generate(event: React.FormEvent) {
     event.preventDefault();
     if (!file || busy) {
       if (!file) setError("Choose a photo first.");
       return;
     }
     setError("");
-    setPhase("uploading");
-    try {
-      const prepared = await prepareUpload({ type: file.type, size: file.size, name: file.name });
-      if (prepared.status !== "ok") throw new Error(prepared.message);
-      // Bytes go straight to private Storage under the server-chosen path; the
-      // bucket and its RLS policy enforce owner folder, type, and size limits.
-      const { error: uploadError } = await createClient().storage.from(MEDIA_BUCKET)
-        .upload(prepared.path, file, { contentType: file.type, upsert: false, cacheControl: "3600" });
-      if (uploadError) throw new Error("Your photo didn’t upload. Check your connection and try again.");
-
-      setPhase("generating");
-      const generated = await createCaptions({ path: prepared.path, context, tone: tone || null, perspective });
-      if (generated.status !== "ok") throw new Error(generated.message);
-      setResult(generated);
-      router.refresh();
-    } catch (caught) {
-      setError(caught instanceof Error && caught.message ? caught.message : "Something went wrong. Try again.");
-    } finally {
-      setPhase("idle");
-    }
+    dismiss();
+    if (!start({ file, context, tone: tone || null, perspective })) setError("Your last photo is still generating. Hang tight.");
   }
 
   if (result) {
@@ -141,7 +120,7 @@ export function CreateStudio({ vibe }: { vibe: { title: string; hint: string } }
           ))}
         </ol>
         <div className="flex flex-col gap-3 sm:flex-row">
-          <Link href="/rate" className="btn-funny">Go rate the feed</Link>
+          <Link href={`/explore?batch=${result.batchId}#caption-${result.captions[0]?.id ?? ""}`} className="btn-funny" onClick={dismiss}>See them on Explore</Link>
           <button type="button" className="btn-quiet" onClick={() => retryAs(other)}>
             <span aria-hidden="true">{PERSPECTIVE_DISPLAY[other].icon}</span> Try a {other} take
           </button>
@@ -156,7 +135,7 @@ export function CreateStudio({ vibe }: { vibe: { title: string; hint: string } }
       <header className="space-y-2 lg:col-span-2">
         <p className="eyebrow">Create</p>
         <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Make something worth rating</h1>
-        <p className="text-muted">Drop a photo. The AI writes three different captions, then everyone votes.</p>
+        <p className="text-muted">Drop a photo. The AI writes three different captions of up to {MAX_CAPTION_WORDS} words, then everyone votes. Feel free to keep browsing while it works.</p>
       </header>
 
       <div>
@@ -176,6 +155,7 @@ export function CreateStudio({ vibe }: { vibe: { title: string; hint: string } }
                   <span className="flex flex-col items-center gap-3 text-white">
                     <span aria-hidden="true" className="size-10 animate-spin rounded-full border-4 border-white/25 border-t-funny" />
                     <span className="text-lg font-semibold">{phase === "uploading" ? "Uploading photo…" : `Writing 3 captions as a ${perspective}…`}</span>
+                    <Link href="/explore" className="pointer-events-auto rounded-full bg-white/15 px-4 py-2 text-sm font-semibold hover:bg-white/25">Browse Explore while you wait</Link>
                   </span>
                 </span>
               )}

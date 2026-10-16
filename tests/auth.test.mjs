@@ -17,6 +17,7 @@ class FakeResponse {
     this.cookies = { set: (c, v) => jar.push(typeof c === "string" ? { name: c, value: v } : c), getAll: () => jar };
   }
   static next() { return new FakeResponse(); }
+  static json(body, init = {}) { const r = new FakeResponse(init.status ?? 200); r.body = body; return r; }
   static redirect(url) { return new FakeResponse(307, url.toString()); }
 }
 
@@ -31,38 +32,74 @@ function proxyFor(userId) {
     return updateSession({ url, nextUrl: new URL(url), cookies: { getAll: () => [], set() {} } });
   };
 }
-const location = (r) => r.headers.get("location") && new URL(r.headers.get("location")).pathname;
 
-for (const path of ["/", "/rate", "/explore", "/create", "/anything"]) test(`logged out ${path} -> /login`, async () => {
+const target = (r) => r.headers.get("location") && (({ pathname, search }) => pathname + search)(new URL(r.headers.get("location")));
+
+for (const path of ["/rate", "/create"]) test(`logged out ${path} -> /login, remembering where to return`, async () => {
   const r = await proxyFor(null)(path);
   assert.equal(r.status, 307);
-  assert.equal(location(r), "/login");
+  assert.equal(target(r), `/login?next=${path}`);
 });
 
-for (const path of ["/login", "/auth/callback"]) test(`logged out ${path} stays public`, async () => {
+test("logged out unknown protected path -> /login without a return path", async () => {
+  assert.equal(target(await proxyFor(null)("/anything")), "/login");
+});
+
+for (const userId of [null, USER]) test(`${userId ? "authenticated" : "logged out"} / -> /explore`, async () => {
+  assert.equal(target(await proxyFor(userId)("/")), "/explore");
+});
+
+for (const path of ["/explore", "/login", "/auth/callback"]) test(`logged out ${path} stays public`, async () => {
   assert.equal((await proxyFor(null)(path)).status, 200);
 });
 
-for (const path of ["/", "/login"]) test(`authenticated ${path} -> /rate`, async () => {
-  assert.equal(location(await proxyFor(USER)(path)), "/rate");
+test("logged out API calls get a 401 JSON error, not a redirect", async () => {
+  const r = await proxyFor(null)("/api/captions");
+  assert.equal(r.status, 401);
+  assert.equal(r.body.status, "error");
+});
+
+test("authenticated /login -> the allow-listed return path, else /explore", async () => {
+  assert.equal(target(await proxyFor(USER)("/login")), "/explore");
+  assert.equal(target(await proxyFor(USER)("/login?next=/rate")), "/rate");
+  for (const evil of ["https://evil.example", "//evil.example", "/auth/callback", "/explore/../admin"]) {
+    assert.equal(target(await proxyFor(USER)(`/login?next=${encodeURIComponent(evil)}`)), "/explore");
+  }
+});
+
+test("safeReturnPath only allows /explore, /rate, and /create", () => {
+  const { safeReturnPath } = loadModule("lib/auth.ts");
+  for (const ok of ["/explore", "/rate", "/create"]) assert.equal(safeReturnPath(ok), ok);
+  for (const bad of [undefined, null, "", "https://evil.example", "//evil.example", "/login", "/rate?x=1", ["/rate"]]) assert.equal(safeReturnPath(bad), "/explore");
 });
 
 for (const path of ["/rate", "/explore", "/create"]) test(`authenticated ${path} renders`, async () => {
   assert.equal((await proxyFor(USER)(path)).status, 200);
 });
 
-function callback(options) {
+function callback(options, returnCookie) {
   const { client, calls } = fakeSupabase(options);
-  const { GET } = loadModule("app/auth/callback/route.ts", { "@/lib/supabase/server": { createClient: async () => client } });
+  const { GET } = loadModule("app/auth/callback/route.ts", {
+    "@/lib/supabase/server": { createClient: async () => client },
+    "next/headers": { cookies: async () => ({ get: (name) => (name === "caption_lab_next" && returnCookie !== undefined ? { value: returnCookie } : undefined) }) },
+  });
   return { GET, calls };
 }
 
-test("callback success -> /rate, ignores next= and forwarded hosts", async () => {
+test("callback success -> /explore by default, ignores next= query and forwarded hosts, clears the return cookie", async () => {
   const { GET, calls } = callback({ userId: USER });
   const r = await GET(new Request("https://app.example/auth/callback?code=abc&next=https://evil.example"));
   assert.equal(r.status, 303);
-  assert.equal(r.headers.get("location"), "/rate");
+  assert.equal(r.headers.get("location"), "/explore");
+  assert.match(r.headers.get("set-cookie"), /^caption_lab_next=; Path=\/; Max-Age=0/);
   assert.deepEqual(calls.find((c) => c[1] === "exchange"), ["auth", "exchange", "abc"]);
+});
+
+test("callback returns to an allow-listed page from the return cookie, never to a URL", async () => {
+  assert.equal((await callback({ userId: USER }, "/rate").GET(new Request("https://app.example/auth/callback?code=x"))).headers.get("location"), "/rate");
+  for (const evil of ["https://evil.example", "//evil.example", "/login"]) {
+    assert.equal((await callback({ userId: USER }, evil).GET(new Request("https://app.example/auth/callback?code=x"))).headers.get("location"), "/explore");
+  }
 });
 
 test("callback without code or verified identity -> /login", async () => {
@@ -70,22 +107,16 @@ test("callback without code or verified identity -> /login", async () => {
   assert.equal((await callback({ userId: null }).GET(new Request("https://app.example/auth/callback?code=x"))).headers.get("location"), "/login");
 });
 
-test("sign out clears the local session and redirects to /login", async () => {
+test("sign out clears the local session and returns to public Explore", async () => {
   const { client, calls } = fakeSupabase({ userId: USER });
   const { stubs } = actionStubs(client, { "next/navigation": { redirect: (p) => { throw new Error(`REDIRECT:${p}`); } } });
-  await assert.rejects(loadModule("app/actions.ts", stubs).signOut(), /REDIRECT:\/login/);
+  await assert.rejects(loadModule("app/actions.ts", stubs).signOut(), /REDIRECT:\/explore/);
   assert.deepEqual(plain(calls.find((c) => c[1] === "signOut")[2]), { scope: "local" });
 });
 
-test("pages require a verified user", async () => {
-  for (const [userId, target] of [[null, "/login"], [USER, "/rate"]]) {
-    const { client } = fakeSupabase({ userId });
-    const page = loadModule("app/page.tsx", {
-      "@/lib/supabase/server": { createClient: async () => client },
-      "next/navigation": { redirect: (p) => { throw new Error(`REDIRECT:${p}`); } },
-    }).default;
-    await assert.rejects(page(), new RegExp(`REDIRECT:${target}`));
-  }
+test("/ always goes to Explore; protected pages require a verified user", async () => {
+  const page = loadModule("app/page.tsx", { "next/navigation": { redirect: (p) => { throw new Error(`REDIRECT:${p}`); } } }).default;
+  assert.throws(() => page(), /REDIRECT:\/explore/);
   const { client } = fakeSupabase({ userId: null });
   const { requireUser } = loadModule("lib/supabase/require-user.ts", {
     "./server": { createClient: async () => client },

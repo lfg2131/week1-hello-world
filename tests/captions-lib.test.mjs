@@ -116,32 +116,54 @@ test("prompt: the chosen perspective changes the instructions sent to the model 
   // Only the per-request part differs; both persisted transcripts carry their own perspective.
   assert.equal(student.systemInstruction, professor.systemInstruction);
   assert.ok(student.persisted.includes(student.userPrompt) && professor.persisted.includes(professor.userPrompt));
-  assert.match(professor.persisted, /\[user\]\nWrite 3 captions for the attached photo\.\nPerspective: Professor/);
+  assert.match(professor.persisted, /\[user\]\nWrite 3 captions for the attached photo, each at most 10 words\.\nPerspective: Professor/);
   // Point of view shapes the joke without forcing a specific school.
   assert.match(prompt.SYSTEM_INSTRUCTION, /names a perspective/);
   assert.doesNotMatch(prompt.SYSTEM_INSTRUCTION + student.userPrompt + professor.userPrompt, /Columbia/);
 });
 
-test("explore: groups caption rows into posts, newest post first", () => {
+test("explore: one card per caption row, newest first, repeating the shared image", () => {
   const row = (id, batch, at, extra = {}) => ({
     id, batch_id: batch, caption: `caption ${id}`, source_image_path: `${USER}/${batch}.jpg`, image_alt: `alt ${batch}`,
     tone: null, perspective: "student", creator_id: USER, created_at: at, ...extra,
   });
-  const posts = explore.groupPosts([
+  const cards = explore.toExploreCards([
     row("a1", "A", "2026-10-04T10:00:00.000+00:00"),
     row("b1", "B", "2026-10-05T10:00:00.000+00:00", { perspective: "professor", tone: "dry", creator_id: OTHER }),
     row("a2", "A", "2026-10-04T10:00:00.000+00:00"),
     row("b2", "B", "2026-10-05T10:00:00.000+00:00", { perspective: "professor", tone: "dry", creator_id: OTHER }),
     row("c1", "C", "2026-10-03T10:00:00.000+00:00", { perspective: "pirate" }),
-  ]);
-  assert.deepEqual(plain(posts.map((post) => post.batchId)), ["B", "A", "C"]);
-  assert.deepEqual(plain(posts[0]), {
-    batchId: "B", createdAt: "2026-10-05T10:00:00.000+00:00", imagePath: `${USER}/B.jpg`, imageAlt: "alt B", tone: "dry",
-    perspective: "professor", creatorId: OTHER, captions: [{ id: "b1", caption: "caption b1" }, { id: "b2", caption: "caption b2" }],
+  ], USER);
+  assert.deepEqual(plain(cards.map((card) => card.id)), ["b1", "b2", "a1", "a2", "c1"]);
+  assert.deepEqual(plain(cards[0]), {
+    id: "b1", batchId: "B", caption: "caption b1", createdAt: "2026-10-05T10:00:00.000+00:00", imagePath: `${USER}/B.jpg`,
+    imageAlt: "alt B", tone: "dry", perspective: "professor", mine: false,
   });
-  assert.deepEqual(plain(posts[1].captions.map((caption) => caption.id)), ["a1", "a2"]);
-  assert.equal(posts[2].perspective, null);
-  assert.deepEqual(plain(explore.groupPosts([])), []);
+  // Same upload, same stored image path, two separate cards.
+  assert.equal(cards[2].imagePath, cards[3].imagePath);
+  assert.equal(cards[2].mine, true);
+  assert.equal(cards[4].perspective, null);
+  // Signed-out viewers never own anything (and have no creator_id column at all).
+  assert.ok(explore.toExploreCards([row("x", "X", "2026-10-01T00:00:00Z", { creator_id: undefined })], null).every((card) => !card.mine));
+  assert.deepEqual(plain(explore.toExploreCards([], null)), []);
+  assert.equal(explore.highlightedBatch("not-a-uuid"), null);
+  assert.equal(explore.highlightedBatch(OBJECT), OBJECT);
+});
+
+test("explore: the public column list excludes prompts, context, model, and creator", () => {
+  const cols = explore.PUBLIC_EXPLORE_COLUMNS.split(", ");
+  assert.deepEqual(cols, ["id", "batch_id", "caption", "source_image_path", "image_alt", "tone", "perspective", "created_at"]);
+  for (const hidden of ["generation_prompt", "user_context", "model", "creator_id"]) assert.ok(!cols.includes(hidden), hidden);
+  assert.match(explore.SIGNED_IN_EXPLORE_COLUMNS, /, creator_id$/);
+});
+
+test("captions: words are counted like the database constraint", () => {
+  assert.equal(v.countWords(""), 0);
+  assert.equal(v.countWords("   "), 0);
+  assert.equal(v.countWords("one"), 1);
+  assert.equal(v.countWords("  two\twords\n "), 2);
+  assert.equal(v.countWords("Dollar slice, hundred-dollar regret."), 4);
+  assert.equal(v.MAX_CAPTION_WORDS, 10);
 });
 
 test("explore: post times read naturally", () => {
