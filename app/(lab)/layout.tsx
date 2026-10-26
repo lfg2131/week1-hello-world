@@ -28,7 +28,7 @@ export default async function LabLayout({ children }: LayoutProps<"/">) {
             )}
           </div>
         </header>
-        <main className="mx-auto w-full max-w-5xl flex-1 px-4 pt-4 pb-28 sm:px-6 sm:pt-10">{children}</main>
+        <main className="mx-auto w-full max-w-5xl flex-1 px-4 pt-4 pb-28 sm:px-6 sm:pt-4">{children}</main>
       </div>
     </GenerationProvider>
   );

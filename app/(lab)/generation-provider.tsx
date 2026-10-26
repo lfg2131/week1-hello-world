@@ -115,7 +115,7 @@ export function GenerationProvider({ children }: { children: React.ReactNode }) 
 export function GenerationToast({ job, onDismiss }: { job: GenerationJob; onDismiss: () => void }) {
   return (
     // Always mounted so screen readers hear each status change.
-    <div aria-live="polite" role="status" className="pointer-events-none fixed inset-x-4 bottom-4 z-40 flex justify-end sm:inset-x-auto sm:right-6 sm:bottom-6">
+    <div aria-live="polite" role="status" className="pointer-events-none relative z-10 mx-auto flex w-full max-w-5xl justify-end px-4 pb-4">
       {job && (
         <div className="toast pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-2xl border border-line bg-surface-raised/95 p-4 shadow-2xl shadow-black/50 backdrop-blur sm:w-80">
           {job.status === "uploading" || job.status === "generating" ? (

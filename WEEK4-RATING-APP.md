@@ -1,3 +1,5 @@
+> Historical submission notes. Week 7 replaces immutable voting with change/undo, keeps the Rate card until Next, and adds private runtime telemetry. See [WEEK7.md](WEEK7.md) for current behavior.
+
 # Week 4 · Caption Lab (AI generation + rating + RLS)
 
 ## Assignment interpretation

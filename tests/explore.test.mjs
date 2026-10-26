@@ -34,7 +34,7 @@ const ROWS = [
   row("s3", "batch-old", IMG_OLD, USER, "student", null, "2026-10-05T19:00:00.000+00:00", "Group project fuel, budget edition."),
 ];
 
-const voteStub = { "@/app/(lab)/rate/actions": { submitVote: async () => ({ status: "saved", captionId: CAPTION_ID, vote: 1 }) } };
+const voteStub = { "@/app/(lab)/rate/actions": { setVote: async () => ({ status: "saved", captionId: CAPTION_ID, vote: 1 }) } };
 
 async function renderExplore(options = {}, { searchParams = {} } = {}) {
   const { client, calls } = fakeSupabase({ userId: USER, rows: ROWS, ...options });
@@ -66,8 +66,8 @@ test("Explore shows one card per caption: image, caption, perspective badge, and
   assert.equal(html.match(new RegExp(`<img src="https://signed.example/${IMG_OLD}" alt="Alt for batch-old"`, "g")).length, 3);
   assert.equal(html.match(/Professor perspective/g).length, 3);
   assert.equal(html.match(/Student perspective/g).length, 3);
-  assert.equal(html.match(/😂<\/span> Funny/g).length, 6);
-  assert.equal(html.match(/😐<\/span> Not funny/g).length, 6);
+  assert.equal(html.match(/😂 Funny/g).length, 6);
+  assert.equal(html.match(/😐 Not funny/g).length, 6);
   for (const id of ["p1", "p2", "p3", "s1", "s2", "s3"]) assert.match(html, new RegExp(`id="caption-${id}"`));
   assert.ok(html.indexOf("Attendance today") < html.indexOf("Dinner, breakfast"), "newest first");
   // Only the viewer's own captions are marked.
@@ -87,7 +87,7 @@ test("Explore is public: a signed-out visitor reads only display columns and see
   assert.match(html, /href="\/login\?next=\/explore"/);
   assert.doesNotMatch(html, /Your post/);
   // Voting buttons are visible to guests; clicking asks them to sign in (see VoteButtons test).
-  assert.equal(html.match(/😂<\/span> Funny/g).length, 6);
+  assert.equal(html.match(/😂 Funny/g).length, 6);
 });
 
 test("Explore restores the viewer's existing votes after a reload", async () => {
@@ -98,7 +98,7 @@ test("Explore restores the viewer's existing votes after a reload", async () => 
   assert.ok(!voteCalls.some((call) => call[1] === "insert"));
   assert.match(html, /You voted Funny/);
   assert.match(html, /You voted Not funny/);
-  assert.equal(html.match(/😂<\/span> Funny/g).length, 4);
+  assert.equal(html.match(/😂 Funny/g).length, 6);
 });
 
 test("Explore highlights a just-generated batch linked from the notification", async () => {
@@ -123,28 +123,29 @@ test("Explore fails loudly (error boundary) instead of showing an empty feed whe
 
 test("VoteButtons: guests are asked to sign in and nothing is submitted", () => {
   let submitted = 0;
-  const { VoteButtons } = loadModule("app/(lab)/explore/vote-buttons.tsx", { ...ui, "@/app/(lab)/rate/actions": { submitVote: async () => { submitted++; return {}; } } });
+  const { VoteButtons } = loadModule("app/(lab)/explore/vote-buttons.tsx", { ...ui, "@/app/(lab)/rate/actions": { setVote: async () => { submitted++; return {}; } } });
   const guest = renderToStaticMarkup(React.createElement(VoteButtons, { captionId: CAPTION_ID, initialVote: null, signedIn: false }));
   assert.match(guest, /Funny/);
   assert.match(guest, /Not funny/);
   const voted = renderToStaticMarkup(React.createElement(VoteButtons, { captionId: CAPTION_ID, initialVote: -1, signedIn: true }));
   assert.match(voted, /You voted Not funny/);
-  assert.doesNotMatch(voted, /<button/);
+  assert.equal(voted.match(/<button/g).length, 2);
+  assert.match(voted, /aria-pressed="true"/);
   assert.equal(submitted, 0);
 });
 
-test("Rate shows a subtle perspective badge on the card and still serves only unrated captions", async () => {
+test("Rate shows a subtle perspective badge on the card and serves saved selections for changing/undo", async () => {
   const { client, calls } = fakeSupabase({
     userId: USER,
     rows: [{ ...row(CAPTION_ID, "batch-new", IMG_NEW, OTHER, "professor", "dry", "2026-10-11T15:00:00.000+00:00", "Grading this like it is a dissertation."), caption_votes: [] }],
   });
-  const page = loadModule("app/(lab)/rate/page.tsx", { ...ui, ...signedIn(client), "./actions": { submitVote: async () => ({}) } }).default;
+  const page = loadModule("app/(lab)/rate/page.tsx", { ...ui, ...signedIn(client), "./actions": { setVote: async () => ({}) } }).default;
   const html = renderToStaticMarkup(await page());
   assert.match(calls.find((call) => call[0] === "ai_captions" && call[1] === "select")[2], /\bperspective\b/);
-  assert.deepEqual(plain(calls.find((call) => call[1] === "is")), ["ai_captions", "is", "caption_votes", null]);
+  assert.ok(!calls.some((call) => call[1] === "is"));
   assert.match(html, /Professor perspective/);
   assert.ok(html.indexOf("Professor perspective") < html.indexOf("Grading this like it is a dissertation."));
-  assert.match(html, /😂<\/span> Funny/);
+  assert.match(html, /😂 Funny/);
 });
 
 test("Create offers a two-option Perspective control that defaults to Student", () => {

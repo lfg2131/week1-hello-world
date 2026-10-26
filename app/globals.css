@@ -141,3 +141,9 @@ body {
   .vote-stamp, .card-enter, .toast { animation: none; }
   * { transition-duration: 0ms !important; }
 }
+
+/* Keep the complete meme and controls within ordinary laptop heights. At high
+   zoom / short heights the image retains a usable minimum and the page scrolls. */
+.rate-image { height: clamp(140px, calc(100svh - 490px), 480px); }
+@media (max-width: 639px) { .rate-image { height: clamp(140px, calc(100svh - 490px), 380px); } }
+button[aria-pressed="true"] { outline: 2px solid #c4b5fd; outline-offset: 3px; }

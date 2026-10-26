@@ -13,17 +13,17 @@ const SIGNED_URL_SECONDS = 60 * 60;
 export default async function RatePage() {
   const { supabase, userId } = await requireUser();
 
-  // Unrated first: left-join the viewer's own votes (RLS exposes only theirs)
-  // and keep captions with no matching vote. Newest content leads.
+  // RLS joins only the viewer's votes. Keep saved choices for change/undo,
+  // then partition this newest batch so unrated captions lead.
   const { data, error } = await supabase
     .from("ai_captions")
-    .select("id, batch_id, caption, source_image_path, image_alt, tone, perspective, created_at, creator_id, caption_votes!left(id)")
-    .is("caption_votes", null)
+    .select("id, batch_id, caption, source_image_path, image_alt, tone, perspective, created_at, creator_id, caption_votes!left(vote)")
     .order("created_at", { ascending: false })
     .limit(FEED_SIZE);
   if (error) throw new Error("Failed to load the rating feed");
 
-  const rows = interleaveBatches((data ?? []) as (FeedRow & { image_alt: string | null })[]);
+  const interleaved = interleaveBatches((data ?? []) as (FeedRow & { image_alt: string | null; caption_votes: { vote: 1 | -1 }[] })[]);
+  const rows = [...interleaved.filter((row) => !row.caption_votes?.length), ...interleaved.filter((row) => row.caption_votes?.length)];
   const paths = [...new Set(rows.map((row) => row.source_image_path))];
   const urls = new Map<string, string>();
   if (paths.length) {
@@ -42,15 +42,16 @@ export default async function RatePage() {
       tone: row.tone,
       perspective: row.perspective,
       mine: row.creator_id === userId,
+      initialVote: row.caption_votes?.[0]?.vote ?? null,
     }] : [];
   });
 
   return (
-    <div className="mx-auto max-w-xl space-y-4 sm:space-y-6">
+    <div className="mx-auto max-w-xl rate-page space-y-3">
       <header className="space-y-2">
         <p className="eyebrow">Rate</p>
-        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Is it funny?</h1>
-        <p className="hidden text-muted sm:block">One tap per caption. Fresh, unrated captions come first.</p>
+        <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Is it funny?</h1>
+        <p className="hidden text-muted sm:block">Vote, change your mind, then choose Next.</p>
       </header>
       {cards.length ? <RateDeck cards={cards} /> : <EmptyState />}
     </div>

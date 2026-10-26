@@ -26,9 +26,9 @@ test("no privileged credentials in tracked or local environment files", () => {
   for (const path of [...new Set([...files, ...envFiles])].filter((p) => !p.startsWith("tests/") && !/\.(ico|png|jpe?g|webp|woff2?)$/.test(p))) {
     const content = read(path);
     // Report only the filename, never the matching value.
-    assert.ok(!/(?:GOOGLE_CLIENT_SECRET|SUPABASE_SERVICE_ROLE_KEY|NEXT_PUBLIC_GEMINI)\s*[=:]|GOCSPX-[\w-]+|sb_secret_[\w-]+|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/.test(content), `Forbidden credential in ${path}`);
+    assert.ok(!/(?:GOOGLE_CLIENT_SECRET|NEXT_PUBLIC_GEMINI)\s*[=:]|GOCSPX-[\w-]+|sb_secret_[\w-]+|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/.test(content), `Forbidden credential in ${path}`);
     if (path !== ".env.local") assert.doesNotMatch(content, /AIza[0-9A-Za-z_-]{30,}/, `Google API key in ${path}`);
-    for (const token of content.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g) || []) {
+    for (const token of (path === ".env.local" ? "" : content).match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g) || []) {
       try { assert.notEqual(JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString()).role, "service_role", `Privileged JWT in ${path}`); }
       catch (error) { if (error.code === "ERR_ASSERTION") throw error; }
     }
@@ -49,7 +49,8 @@ test("no raw HTML injection, no image bytes in Postgres, no client-chosen ids", 
   assert.doesNotMatch(migrations, /bytea|base64/);
   assert.doesNotMatch(read("app/(lab)/rate/actions.ts"), /\.(update|upsert|delete)\(/);
   assert.doesNotMatch(read("app/(lab)/create/actions.ts"), /\.(update|upsert)\(/);
-  assert.match(read("app/(lab)/rate/actions.ts"), /user_id: userId/);
+  assert.match(read("app/(lab)/rate/actions.ts"), /getVerifiedUserId\(supabase\)/);
+  assert.match(read("app/(lab)/rate/actions.ts"), /rpc\("caption_lab_set_vote"/);
   assert.match(read("app/(lab)/create/actions.ts"), /creator_id: userId/);
 });
 
@@ -101,8 +102,8 @@ test("Explore is public but reads only display data; Rate and Create stay protec
 
 test("Explore votes reuse the verified Rate action; the browser never sends a user id", () => {
   const buttons = read("app/(lab)/explore/vote-buttons.tsx");
-  assert.match(buttons, /import \{ submitVote \} from "@\/app\/\(lab\)\/rate\/actions"/);
-  assert.match(buttons, /submitVote\(captionId, value\)/);
+  assert.match(buttons, /import \{ setVote \} from "@\/app\/\(lab\)\/rate\/actions"/);
+  assert.match(buttons, /setVote\(captionId, vote === value \? null : value\)/);
   assert.doesNotMatch(buttons, /user_?[iI]d/);
   assert.match(buttons, /if \(!signedIn\) \{\s*setAskSignIn\(true\);\s*return;/);
 });
@@ -158,8 +159,16 @@ test("Week 3 profile UX and the Week 2 table are gone from the product", () => {
 test("UI renders images with alt text and Funny / Not funny text labels", () => {
   const deck = read("app/(lab)/rate/rate-deck.tsx");
   assert.match(deck, /<Image[\s\S]*?alt=\{card\.imageAlt\}/);
-  assert.match(deck, /Funny<\/button>|> Funny\s*<\/button>/);
+  assert.match(deck, /Funny<\/button>/);
   assert.match(deck, /Not funny/);
   assert.match(read("app/login/page.tsx"), /<Image[\s\S]*?alt="[^"]{20,}"/);
   assert.match(read("app/(lab)/rate/page.tsx"), /Nothing left to rate/);
+});
+
+
+test("Week 7 service credential stays in a server-only runtime module; votes never use it",()=>{
+ const users=appFiles.filter(path=>read(path).includes("process.env.SUPABASE_SERVICE_ROLE_KEY"));
+ assert.deepEqual(users,["lib/supabase/runtime.ts"]);
+ assert.match(read(users[0]),/^import "server-only";/);
+ assert.doesNotMatch(read("app/(lab)/rate/actions.ts"),/RuntimeClient|privileged|SERVICE_ROLE/);
 });

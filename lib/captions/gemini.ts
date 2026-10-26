@@ -21,6 +21,13 @@ export const CAPTION_SCHEMA = {
   required: ["alt_text", "captions"],
 } as const;
 
+export const GENERATION_SETTINGS = {
+  responseMimeType: "application/json",
+  responseJsonSchema: CAPTION_SCHEMA,
+  temperature: 1,
+  thinkingConfig: { thinkingLevel: "low" },
+} as const;
+
 export class GenerationError extends Error {
   readonly userMessage: string;
   readonly code: string;
@@ -111,24 +118,45 @@ export function parseCaptionResponse(payload: unknown): { captions: string[]; al
 const RETRYABLE = new Set(["network", "http_500", "http_502", "http_503", "http_504", "unsafe_output", "duplicate_captions", "too_many_words"]);
 
 type GenerateInput = { prompt: CaptionPrompt; image: Uint8Array; mimeType: ImageMimeType };
-type GenerateConfig = { apiKey: string; model: string; fetchImpl?: typeof fetch; timeoutMs?: number; attempts?: number; retryDelayMs?: number };
+export type AttemptRecord = { attempt: number; status: "succeeded" | "failed"; output: unknown; error_code: string | null; duration_ms: number; started_at: string; usage: Record<string, number> | null };
+type GenerateConfig = { onAttempt?: (record: AttemptRecord) => Promise<void>; apiKey: string; model: string; fetchImpl?: typeof fetch; timeoutMs?: number; attempts?: number; retryDelayMs?: number };
 
 /** One model call, retried once for transient failures or rejected output. */
 export async function generateCaptions(input: GenerateInput, config: GenerateConfig) {
-  const attempts = config.attempts ?? 2;
+  const attempts = Math.min(2, Math.max(1, Number.isInteger(config.attempts) ? config.attempts! : 2));
   for (let attempt = 1; ; attempt++) {
+    const started = Date.now();
+    let output: unknown = null;
+    let usage: Record<string, number> | null = null;
+    let generated: Awaited<ReturnType<typeof requestCaptions>> | undefined;
+    let failure: unknown;
     try {
-      return await requestCaptions(input, config);
-    } catch (error) {
-      if (attempt >= attempts || !(error instanceof GenerationError) || !RETRYABLE.has(error.code)) throw error;
-      await new Promise((resolve) => setTimeout(resolve, config.retryDelayMs ?? 800));
-    }
+      generated = await requestCaptions(input, config, (payload) => {
+        // Explicit allowlist: visible text only, no thoughts, inline data, headers,
+        // provider error bodies, tokens or credentials. Bound provider text size.
+        const data = payload as { candidates?: { finishReason?: string; content?: { parts?: { text?: string; thought?: boolean }[] } }[]; promptFeedback?: { blockReason?: string }; usageMetadata?: Record<string, unknown> };
+        output = {
+          finishReason: data?.candidates?.[0]?.finishReason?.slice(0, 80).replaceAll(config.apiKey, "[redacted]") ?? null,
+          blockReason: data?.promptFeedback?.blockReason?.slice(0, 80).replaceAll(config.apiKey, "[redacted]") ?? null,
+          text: (data?.candidates?.[0]?.content?.parts ?? []).filter((part) => !part.thought && typeof part.text === "string").map((part) => part.text).join("").replaceAll(config.apiKey, "[redacted]").slice(0, 20000),
+        };
+        const counts = Object.fromEntries(["promptTokenCount", "candidatesTokenCount", "totalTokenCount"].flatMap((key) => typeof data?.usageMetadata?.[key] === "number" && Number.isFinite(data.usageMetadata[key]) ? [[key, data.usageMetadata[key] as number]] : []));
+        usage = Object.keys(counts).length ? counts : null;
+      });
+    } catch (error) { failure = error; }
+    try {
+      await config.onAttempt?.({ attempt, status: failure ? "failed" : "succeeded", output, error_code: failure instanceof GenerationError ? failure.code : failure ? "unexpected" : null, duration_ms: Date.now() - started, started_at: new Date(started).toISOString(), usage });
+    } catch { throw new GenerationError("Generation logging failed. Try again later.", "telemetry_failed"); }
+    if (!failure && generated) return generated;
+    if (attempt >= attempts || !(failure instanceof GenerationError) || !RETRYABLE.has(failure.code)) throw failure;
+    await new Promise((resolve) => setTimeout(resolve, config.retryDelayMs ?? 800));
   }
 }
 
 async function requestCaptions(
   input: GenerateInput,
   { apiKey, model, fetchImpl = fetch, timeoutMs = 25_000 }: GenerateConfig,
+  receive: (payload: unknown) => void,
 ) {
   let response: Response;
   try {
@@ -145,12 +173,7 @@ async function requestCaptions(
             { text: input.prompt.userPrompt },
           ],
         }],
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseJsonSchema: CAPTION_SCHEMA,
-          temperature: 1,
-          thinkingConfig: { thinkingLevel: "low" },
-        },
+        generationConfig: GENERATION_SETTINGS,
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -167,5 +190,6 @@ async function requestCaptions(
   } catch {
     throw new GenerationError("The AI returned something unreadable. Try again.", "invalid_body");
   }
+  receive(payload);
   return { ...parseCaptionResponse(payload), model };
 }

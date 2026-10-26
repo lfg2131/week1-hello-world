@@ -162,20 +162,20 @@ test("invalid perspective is rejected server-side before Gemini, nothing is save
   }
 });
 
-test("failed generation does not pretend success, inserts nothing, and removes the upload", async () => {
+test("failed generation does not pretend success, inserts nothing, and retains the logged source", async () => {
   const t = createActions({}, async () => new Response("{}", { status: 400 }));
   const result = await t.actions.createCaptions({ path: PATH });
   assert.equal(result.status, "error");
   assert.equal(inserts(t.calls, "ai_captions").length, 0);
-  assert.ok(removed(t.calls));
+  assert.ok(!removed(t.calls));
 });
 
-test("database insert failure is reported honestly and cleans up", async () => {
+test("database insert failure is reported honestly and retains the logged source", async () => {
   const t = createActions({ insertError: { code: "42501", message: "rls" } });
   const result = await t.actions.createCaptions({ path: PATH });
   assert.equal(result.status, "error");
   assert.match(result.message, /couldn’t be saved/);
-  assert.ok(removed(t.calls));
+  assert.ok(!removed(t.calls));
 });
 
 test("hourly generation limit fails closed", async () => {
@@ -186,43 +186,22 @@ test("hourly generation limit fails closed", async () => {
   }
 });
 
-// ---- Voting -----------------------------------------------------------
-function voteActions(options = {}) {
-  const { client, calls } = fakeSupabase({ userId: USER, ...options });
-  return { submitVote: loadModule("app/(lab)/rate/actions.ts", actionStubs(client).stubs).submitVote, calls };
+// ---- Desired-state voting: database RLS/atomic behavior also tested live. ----
+function voteActions(options={}) {
+ const {client,calls}=fakeSupabase({userId:USER,...options});
+ return {setVote:loadModule("app/(lab)/rate/actions.ts",actionStubs(client).stubs).setVote,calls};
 }
-
-test("unauthenticated vote is rejected without a database write", async () => {
-  const t = voteActions({ userId: null });
-  assert.equal((await t.submitVote(CAPTION_ID, 1)).status, "error");
-  assert.equal(inserts(t.calls, "caption_votes").length, 0);
+test("anonymous votes are rejected before the invoker RPC",async()=>{
+ const t=voteActions({userId:null});assert.equal((await t.setVote(CAPTION_ID,1)).status,"error");assert.ok(!t.calls.some(c=>c[0]==="rpc"));
 });
-
-test("invalid vote values and caption ids are rejected", async () => {
-  const t = voteActions();
-  for (const [id, vote] of [[CAPTION_ID, 0], [CAPTION_ID, 2], [CAPTION_ID, "funny"], ["not-a-uuid", 1], [{ id: CAPTION_ID }, 1]]) {
-    assert.equal((await t.submitVote(id, vote)).status, "error");
-  }
-  assert.equal(inserts(t.calls, "caption_votes").length, 0);
+test("only UUID captions and exactly 1, -1, or null are accepted",async()=>{
+ const t=voteActions();for(const [id,vote] of [[CAPTION_ID,0],[CAPTION_ID,2],[CAPTION_ID,"1"],[CAPTION_ID,undefined],["bad",1]])assert.equal((await t.setVote(id,vote)).status,"error");
+ assert.ok(!t.calls.some(c=>c[0]==="rpc"));
 });
-
-for (const vote of [1, -1]) test(`valid ${vote} vote INSERTs a row with auth-derived user_id and correct caption_id`, async () => {
-  const t = voteActions();
-  const result = await t.submitVote(CAPTION_ID, vote);
-  assert.deepEqual({ ...result }, { status: "saved", captionId: CAPTION_ID, vote });
-  const [insert] = inserts(t.calls, "caption_votes");
-  assert.deepEqual({ ...insert[2] }, { caption_id: CAPTION_ID, user_id: USER, vote });
-  assert.ok(!t.calls.some((c) => ["update", "upsert", "delete"].includes(c[1])));
+for(const vote of [1,-1,null])test(`desired vote ${vote} is explicit and retry-safe`,async()=>{
+ const t=voteActions();for(let i=0;i<2;i++)assert.deepEqual(plain(await t.setVote(CAPTION_ID,vote)),{status:"saved",captionId:CAPTION_ID,vote});
+ const calls=t.calls.filter(c=>c[0]==="rpc");assert.equal(calls.length,2);assert.deepEqual(plain(calls[0]),["rpc","caption_lab_set_vote",{p_caption_id:CAPTION_ID,p_vote:vote}]);assert.deepEqual(plain(calls[0]),plain(calls[1]));assert.ok(!JSON.stringify(calls).includes(USER),"database derives user identity");
 });
-
-test("duplicate and nonexistent captions are handled gracefully", async () => {
-  assert.equal((await voteActions({ voteError: { code: "23505" } }).submitVote(CAPTION_ID, 1)).status, "duplicate");
-  const missing = await voteActions({ voteError: { code: "23503" } }).submitVote(CAPTION_ID, 1);
-  assert.equal(missing.status, "error");
-  assert.match(missing.message, /isn’t available/);
-});
-
-test("voting module exposes only submitVote (no update/delete path)", () => {
-  const { client } = fakeSupabase({ userId: USER });
-  assert.deepEqual(plain(Object.keys(loadModule("app/(lab)/rate/actions.ts", actionStubs(client).stubs)).filter((k) => k !== "__esModule")), ["submitVote"]);
+test("database errors are honest and never claim a saved selection",async()=>{
+ for(const code of ["23503","42501","23505"]){const t=voteActions({voteError:{code}});assert.equal((await t.setVote(CAPTION_ID,1)).status,"error");}
 });

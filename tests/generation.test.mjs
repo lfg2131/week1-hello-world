@@ -36,7 +36,7 @@ const toast = (mod, job) => renderToStaticMarkup(React.createElement(mod.Generat
 
 test("notification: in progress, ready (with a link to the captions), and failed", () => {
   const { mod } = loadProvider();
-  assert.match(toast(mod, null), /^<div aria-live="polite" role="status" class="[^"]*fixed[^"]*bottom-4[^"]*"><\/div>$/);
+  assert.match(toast(mod, null), /^<div aria-live="polite" role="status" class="[^"]*relative[^"]*"><\/div>$/);
   for (const status of ["uploading", "generating"]) assert.match(toast(mod, { status, perspective: "professor" }), /Generating your captions…/);
   assert.match(toast(mod, { status: "generating", perspective: "professor" }), /Writing 3 professor takes/);
   const ready = toast(mod, { status: "success", result: OK });
@@ -46,8 +46,9 @@ test("notification: in progress, ready (with a link to the captions), and failed
   const failed = toast(mod, { status: "error", message: "The AI is busy right now. Wait a minute and try again." });
   assert.match(failed, /Couldn’t make your captions/);
   assert.match(failed, /The AI is busy right now/);
-  // Bottom-right placement on larger screens.
-  assert.match(failed, /sm:right-6 sm:bottom-6/);
+  // In-flow placement cannot cover the voting controls.
+  assert.match(failed, /relative/);
+  assert.doesNotMatch(failed, /fixed/);
 });
 
 // Captures the provider's context during a server render, then drives it.

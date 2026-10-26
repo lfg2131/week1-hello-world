@@ -1,3 +1,5 @@
+> Historical submission notes. Week 7 replaces immutable voting with change/undo, keeps the Rate card until Next, and adds private runtime telemetry. See [WEEK7.md](WEEK7.md) for current behavior.
+
 # Week 6 · Caption Lab: feedback iteration + admin panel
 
 Week 6 builds on the Week 5 app (`WEEK5-FEEDBACK.md`, `WEEK4-RATING-APP.md`) with the six changes requested in the Week 5 feedback meeting. The new admin panel is a **separate app and repository**: [`lfg2131/caption-lab-admin`](https://github.com/lfg2131/caption-lab-admin). Both apps use the same Supabase project.

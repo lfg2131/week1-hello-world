@@ -17,7 +17,8 @@ import {
   type Perspective,
   type Tone,
 } from "@/lib/captions/validation";
-import { buildCaptionPrompt } from "@/lib/captions/prompt";
+import { beginGeneration } from "@/lib/captions/runtime";
+import { createRuntimeClient } from "@/lib/supabase/runtime";
 import { GenerationError, generateCaptions, getGeminiConfig } from "@/lib/captions/gemini";
 
 // Light abuse guard for a shared free-tier key: 10 generations per user per hour.
@@ -108,12 +109,19 @@ export async function createCaptions(input: unknown): Promise<GenerateResult> {
     return { status: "error", message: RATE_LIMITED };
   }
 
-  const prompt = buildCaptionPrompt(options, { path, mimeType: sniffed, bytes: bytes.byteLength });
+  let execution: Awaited<ReturnType<typeof beginGeneration>> | undefined;
+  let registering = false;
   let generated: Awaited<ReturnType<typeof generateCaptions>>;
   try {
-    generated = await generateCaptions({ prompt, image: bytes, mimeType: sniffed }, getGeminiConfig());
+    const config = getGeminiConfig();
+    registering = true;
+    execution = await beginGeneration(createRuntimeClient(), userId, "main", { path, mimeType: sniffed, bytes: bytes.byteLength }, options, config.model);
+    generated = await generateCaptions({ prompt: execution.prompt, image: bytes, mimeType: sniffed }, { ...config, onAttempt: execution.onAttempt });
   } catch (error) {
-    await removeUpload(supabase, path);
+    if (execution) {
+      try { await execution.finish([], error instanceof GenerationError ? error.code : "unexpected"); }
+      catch { return { status: "error", message: "Generation failed and its outcome could not be recorded. Try again later." }; }
+    } else if (!registering) { await removeUpload(supabase, path); }
     return { status: "error", message: error instanceof GenerationError ? error.userMessage : "Caption generation failed. Try again." };
   }
 
@@ -126,7 +134,7 @@ export async function createCaptions(input: unknown): Promise<GenerateResult> {
       creator_id: userId,
       source_image_path: path,
       caption,
-      generation_prompt: prompt.persisted,
+      generation_prompt: execution.prompt.persisted,
       user_context: options.context,
       tone: options.tone,
       perspective: options.perspective,
@@ -135,9 +143,12 @@ export async function createCaptions(input: unknown): Promise<GenerateResult> {
     })))
     .select("id, caption");
   if (insertError || rows?.length !== CAPTION_COUNT) {
-    await removeUpload(supabase, path);
+    try { await execution.finish([], "caption_save_failed"); } catch { /* User sees a save error below; no success claimed. */ }
     return { status: "error", message: "Your captions were written but couldn’t be saved. Nothing was posted. Try again." };
   }
+  try { await execution.finish(rows.map((row) => row.id)); }
+  catch { return { status: "error", message: "Captions were saved, but their telemetry link failed. Refresh before trying again." }; }
+
 
   const { data: signed } = await supabase.storage.from(MEDIA_BUCKET).createSignedUrl(path, SIGNED_URL_SECONDS);
   revalidatePath("/rate");

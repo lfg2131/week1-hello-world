@@ -1,3 +1,4 @@
+-- Week 7: own vote update/delete expectations changed deliberately. Run week7_rls_check.sql for current writer-allowlist and cross-user coverage.
 -- Week 4 live RLS/grant check. Run in the SQL editor; it ALWAYS rolls back by
 -- raising a final exception whose message lists every result ("ok ..." / "FAIL ...").
 -- Storage blocks direct SQL deletes, so the delete policy predicate is evaluated directly.
@@ -38,8 +39,8 @@ begin
   begin insert into public.caption_votes(caption_id,user_id,vote) values (cap,a,5); r:=r||'FAIL vote=5;'; exception when check_violation then r:=r||'ok invalid vote rejected;'; end;
   insert into public.caption_votes(caption_id,user_id,vote) values (cap,a,1); r:=r||'ok vote +1 inserted;';
   begin insert into public.caption_votes(caption_id,user_id,vote) values (cap,a,-1); r:=r||'FAIL duplicate vote;'; exception when unique_violation then r:=r||'ok duplicate vote rejected;'; end;
-  begin update public.caption_votes set vote=-1 where caption_id=cap; r:=r||'FAIL vote update;'; exception when insufficient_privilege then r:=r||'ok vote update denied;'; end;
-  begin delete from public.caption_votes where caption_id=cap; r:=r||'FAIL vote delete;'; exception when insufficient_privilege then r:=r||'ok vote delete denied;'; end;
+  update public.caption_votes set vote=-1 where caption_id=cap; r:=r||'ok own vote update;';
+  delete from public.caption_votes where caption_id=cap; r:=r||'ok own vote delete;';
   begin insert into public.caption_votes(caption_id,user_id,vote) values (gen_random_uuid(),a,1); r:=r||'FAIL vote nonexistent caption;'; exception when foreign_key_violation then r:=r||'ok nonexistent caption FK;'; end;
 
   perform set_config('request.jwt.claims',json_build_object('sub',b,'role','authenticated')::text,true);

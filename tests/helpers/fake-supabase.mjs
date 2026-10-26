@@ -1,3 +1,4 @@
+import { loadModule } from "./load-ts.mjs";
 import { JPEG } from "./fixtures.mjs";
 
 // A recording stand-in for the Supabase server client. Every call is logged
@@ -52,6 +53,7 @@ export function fakeSupabase({
       exchangeCodeForSession: async (code) => { calls.push(["auth", "exchange", code]); return { error: null }; },
       signOut: async (options) => { calls.push(["auth", "signOut", options]); return { error: null }; },
     },
+    rpc: async (name,args) => { calls.push(["rpc",name,args]); return { data:null,error:voteError }; },
     from: (table) => { calls.push([table, "from"]); return builder(table); },
     storage: {
       from: (bucket) => ({
@@ -74,6 +76,11 @@ export function actionStubs(client, extra = {}) {
     revalidated,
     stubs: {
       "@/lib/supabase/server": { createClient: async (options) => { client.lastOptions = options; return client; } },
+      "@/lib/supabase/runtime": { createRuntimeClient: () => client },
+      "@/lib/captions/runtime": { beginGeneration: async (_db,_user,_app,image,options) => {
+        const { buildCaptionPrompt } = loadModule("lib/captions/prompt.ts");
+        return { id:"test-request", prompt:buildCaptionPrompt(options,image), onAttempt:async()=>{}, finish:async()=>{} };
+      } },
       "next/cache": { revalidatePath: (path) => revalidated.push(path) },
       ...extra,
     },
