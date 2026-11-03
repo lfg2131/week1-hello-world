@@ -58,6 +58,7 @@ create table public.caption_studio_runs (
 );
 create index on public.caption_studio_runs(chain_id,started_at desc);
 create index on public.caption_studio_runs(image_id);
+create index on public.caption_studio_runs(requester_id);
 create unique index caption_studio_one_running on public.caption_studio_runs(requester_id) where status='running';
 create table public.caption_studio_attempts (
  id uuid primary key default gen_random_uuid(), run_id uuid not null references public.caption_studio_runs(id) on delete restrict,
